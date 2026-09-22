@@ -15,7 +15,7 @@ import jax
 import jax.numpy as jnp
 
 from .models import gbm_terminal
-from .payoffs import PAYOFFS, call_payoff_smooth
+from .payoffs import PAYOFFS, call_payoff_smooth, digital_payoff_smooth
 
 
 def mean_se(x):
@@ -61,5 +61,19 @@ def smooth_gamma_samples(S0, sigma, r, T, K, Z, eps):
 @jax.jit
 def smooth_price_samples(S0, sigma, r, T, K, Z, eps):
     return jax.vmap(_smooth_call_one_path, in_axes=(None,) * 5 + (0, None))(
+        S0, sigma, r, T, K, Z, eps
+    )
+
+
+def _smooth_digital_one_path(S0, sigma, r, T, K, z, eps):
+    ST = gbm_terminal(S0, sigma, r, T, z)
+    return jnp.exp(-r * T) * digital_payoff_smooth(ST, K, eps)
+
+
+@jax.jit
+def smooth_digital_delta_samples(S0, sigma, r, T, K, Z, eps):
+    """Autodiff delta of the sigmoid-smoothed digital, per path."""
+    g = jax.grad(_smooth_digital_one_path, argnums=0)
+    return jax.vmap(g, in_axes=(None, None, None, None, None, 0, None))(
         S0, sigma, r, T, K, Z, eps
     )

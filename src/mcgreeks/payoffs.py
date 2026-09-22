@@ -10,7 +10,12 @@ def put_payoff(ST, K):
     return jnp.maximum(K - ST, 0.0)
 
 
-PAYOFFS = {"call": call_payoff, "put": put_payoff}
+def digital_payoff(ST, K):
+    """Cash-or-nothing digital call: pays 1 if S_T > K. A jump, not a kink."""
+    return (ST > K).astype(ST.dtype)
+
+
+PAYOFFS = {"call": call_payoff, "put": put_payoff, "digital": digital_payoff}
 
 
 # ---- smoothed payoffs (make pathwise / autodiff second derivatives non-zero) ----
@@ -24,3 +29,10 @@ def call_payoff_smooth(ST, K, eps):
     import jax  # local import keeps the module's top clean
 
     return eps * jax.nn.softplus((ST - K) / eps)
+
+
+def digital_payoff_smooth(ST, K, eps):
+    """Sigmoid digital: 1 / (1 + e^{-(S-K)/eps}) -> 1{S > K} as eps -> 0."""
+    import jax
+
+    return jax.nn.sigmoid((ST - K) / eps)

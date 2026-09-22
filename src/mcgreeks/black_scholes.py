@@ -33,3 +33,14 @@ def bs_greeks(S0, K, r, sigma, T, kind="call"):
     else:
         raise ValueError(f"unknown option kind: {kind}")
     return {"delta": delta, "gamma": gamma, "vega": vega, "rho": rho}
+
+
+# ---- cash-or-nothing digital call: pays 1 if S_T > K --------------------------
+def bs_digital_price(S0, K, r, sigma, T):
+    _, d2 = _d1_d2(S0, K, r, sigma, T)
+    return jnp.exp(-r * T) * norm.cdf(d2)
+
+
+def bs_digital_delta(S0, K, r, sigma, T):
+    _, d2 = _d1_d2(S0, K, r, sigma, T)
+    return jnp.exp(-r * T) * norm.pdf(d2) / (S0 * sigma * jnp.sqrt(T))
