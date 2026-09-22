@@ -10,7 +10,7 @@ and compared against finite differences, likelihood-ratio estimators and Black-S
 - [x] Finite-difference baseline (CRN and independent seeds), error vs bump size (E2)
 - [x] Gamma: naive AD vs LR vs pathwise-LR vs smoothing (E3, E4)
 - [x] Digital options: autodiff delta fails, LR / smoothing / FD compared (E5)
-- [ ] Basket option and cost scaling
+- [x] Basket option: all deltas, vegas, correlation sensitivities in one pass; cost scaling (E6)
 
 ## Setup
 
@@ -113,3 +113,29 @@ Cash-or-nothing call paying 1 if S_T > K, ATM. Exact delta 0.01876. Same random 
   S0 phi(d1) = K e^{-rT} phi(d2) when K = S0. The two problems are the same
   maths: differentiating through a jump at the strike. That is why E3 and E5
   produce nearly identical numbers.
+
+## E6: basket option, where autodiff pays off
+
+![E6](results/e6_basket.png)
+
+Basket call on d correlated GBM assets (equal weights, correlation 0.5, vols 15-35%),
+100,000 paths. No closed form, so Monte Carlo is actually needed here. One `jax.grad`
+call returns all P = d deltas + d vegas + d(d-1)/2 correlation sensitivities.
+All timings measured (Linux CPU; rerun on your own machine, numbers vary):
+
+| Assets d | Sensitivities P | Autodiff (x one pricing) | Bumping (x one pricing) | AD speedup |
+|---|---|---|---|---|
+| 2 | 5 | 2.4 | 8.7 | 3.6x |
+| 5 | 20 | 3.3 | 50 | 15x |
+| 10 | 65 | 3.1 | 148 | 47x |
+| 20 | 230 | 6.9 | 570 | 82x |
+| 35 | 665 | 6.1 | 1,435 | 235x |
+| 50 | 1,325 | 4.1 | 2,506 | 608x |
+
+- Bumping costs 2P + 1 pricings, exactly as theory says (dotted line).
+- Autodiff stays between 2x and 7x one pricing whatever P is: 1,325 sensitivities
+  for about the cost of 4 pricings. At d = 50 that is 0.19 s against 116 s.
+- Correctness without a closed form is checked three ways (`tests/test_basket.py`):
+  d = 1 reduces to Black-Scholes; autodiff equals CRN bumping to ~1e-5; and Euler's
+  theorem V = sum_i S0_i dV/dS0_i + K dV/dK holds to 1e-10 (the price is
+  homogeneous of degree 1 in spots and strike).
