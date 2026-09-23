@@ -34,7 +34,10 @@ import numpy as np
 from scipy import stats
 
 import mcgreeks  # noqa: F401
-from mcgreeks.basket import basket_greeks_se, example_basket, geometric_basket_greeks
+from mcgreeks.basket import basket_greeks_batches, example_basket, geometric_basket_greeks
+from mcgreeks.stats import family_zscores, k_familywise
+
+P4 = 2 * stats.norm.sf(4.0)   # false-alarm probability of one 4-SE comparison
 
 R, T, K = 0.05, 1.0, 100.0
 N, N_BATCHES, DS, REPS = 200_000, 200, (2, 10, 50), 200
@@ -55,12 +58,17 @@ def zscores(d, z_tag):
     """z per group, for the fixed problem example_basket(d) and normals from z_tag."""
     S0, sigma, rho, w = example_basket(d, seed(f"geo-basket-{d}"))
     Z = jax.random.normal(jax.random.PRNGKey(seed(z_tag)), (N, d), dtype=jnp.float64)
-    mc = basket_greeks_se(S0, sigma, rho, R, T, K, w, Z, n_batches=N_BATCHES, geometric=True)
+    gb = basket_greeks_batches(S0, sigma, rho, R, T, K, w, Z, N_BATCHES, True)
     ex = geometric_basket_greeks(S0, sigma, rho, R, T, K, w)
-    return {g: {"z": np.atleast_1d(np.asarray((mc[g][0] - ex[g]) / mc[g][1])),
-                "exact": np.atleast_1d(np.asarray(ex[g])),
-                "mc": np.atleast_1d(np.asarray(mc[g][0])),
-                "se": np.atleast_1d(np.asarray(mc[g][1]))} for g in GROUPS}
+    out = {}
+    for g in GROUPS:
+        b = np.asarray(gb[g]).reshape(N_BATCHES, -1)
+        m, se = b.mean(0), b.std(0, ddof=1) / np.sqrt(N_BATCHES)
+        e = np.atleast_1d(np.asarray(ex[g]))
+        out[g] = {"z": (m - e) / se, "exact": e, "mc": m, "se": se, "batches": b}
+    out["family"] = family_zscores(np.concatenate([out[g]["batches"] for g in GROUPS], axis=1),
+                                   np.concatenate([out[g]["exact"] for g in GROUPS]))
+    return out
 
 
 def p_indep(m, P):
@@ -94,13 +102,23 @@ def part_a():
 
 
 def part_b():
-    calib, pooled = [], {}
+    calib, pooled, agg = [], {}, []
     for d in DS:
         Zr = {g: [] for g in GROUPS}
+        t_mean, z_msq, z_norm, chi_f, ind_fail = [], [], [], [], []
         for j in range(REPS):
             zs = zscores(d, f"e9-rep-Z-{d}-{j}")
             for g in GROUPS:
                 Zr[g].append(zs[g]["z"])
+            f = zs["family"]
+            k = 4.0 if d == 2 else k_familywise(f["P"], P4, DOF)
+            t_mean.append(f["mean_z"] / f["se_mean_z"])
+            z_norm.append((f["mean_z2"] - f["expected_mean_z2"]) / f["sd_mean_z2"])
+            z_msq.append(f["mean_z2_score"])
+            chi_f.append(f["chi2_dof"])
+            ind_fail.append(np.max(np.abs(f["z"])) >= k)
+        agg.append(aggregate_row(d, k, np.array(t_mean), np.array(z_msq), np.array(z_norm),
+                                 np.array(ind_fail), float(np.median(chi_f))))
         Zr = {g: np.stack(v) for g, v in Zr.items()}            # (REPS, P_g)
         allz = np.concatenate([Zr[g] for g in GROUPS], axis=1)   # (REPS, P)
         pooled[d] = allz.ravel()
@@ -121,15 +139,32 @@ def part_b():
                                 f"fwer_{m:g}_hi": 1.0 if k == REPS else hi,
                                 f"fwer_{m:g}_indep": p_indep(m, P)})
             calib.append(row)
-    return calib, pooled
+    return calib, pooled, agg
+
+
+def aggregate_row(d, k, t_mean, z_msq, z_norm, ind_fail, chi_f):
+    """Calibration of the family tests over REPS seeds: each aggregate statistic should
+    be ~N(0, 1) (t_199 for mean z), so sd ~ 1 and |.| > 2 in ~4.6% of seeds.
+    mean_z2_stat is the scaled-chi-square score used by the tests; mean_z2_normal is
+    the rejected normal approximation, kept for the before/after."""
+    row = {"d": d, "k_individual": k, "reps": REPS, "chi2_dof_median": chi_f,
+           "individual_fail_share": float(ind_fail.mean())}
+    for name, x in (("mean_z_stat", t_mean), ("mean_z2_stat", z_msq), ("mean_z2_normal", z_norm)):
+        row.update({f"{name}_mean": float(x.mean()), f"{name}_sd": float(x.std(ddof=1)),
+                    f"{name}_sd_lo": float(x.std(ddof=1) * np.sqrt((REPS - 1) / stats.chi2.ppf(0.975, REPS - 1))),
+                    f"{name}_sd_hi": float(x.std(ddof=1) * np.sqrt((REPS - 1) / stats.chi2.ppf(0.025, REPS - 1))),
+                    f"{name}_gt2": float(np.mean(np.abs(x) > 2)),
+                    f"{name}_max_abs": float(np.max(np.abs(x))),
+                    f"{name}_ge4": int(np.sum(np.abs(x) >= 4))})
+    return row
 
 
 def main():
     summary, rows = part_a()
-    calib, pooled = part_b()
+    calib, pooled, agg = part_b()
     RESULTS.mkdir(exist_ok=True)
     for name, data in (("e9_geometric_basket.csv", summary), ("e9_zscores.csv", rows),
-                       ("e9_calibration.csv", calib)):
+                       ("e9_calibration.csv", calib), ("e9_aggregate.csv", agg)):
         with (RESULTS / name).open("w", newline="") as f:
             wr = csv.DictWriter(f, fieldnames=list(dict.fromkeys(k for r in data for k in r)))
             wr.writeheader()
@@ -158,6 +193,19 @@ def main():
               f"{c['fwer_3_hi']:.1%}] (independence {c['fwer_3_indep']:.1%})   m=4: "
               f"{c['fwer_4']:.1%} [{c['fwer_4_lo']:.1%}, {c['fwer_4_hi']:.1%}] "
               f"(independence {c['fwer_4_indep']:.2%})")
+
+    print(f"\nE9 (c): family tests over {REPS} seeds (each aggregate statistic should be "
+          f"~N(0, 1): sd 1, |.|>2 in 4.6%)")
+    for a in agg:
+        print(f"  d={a['d']:>2}: individual |z| >= {a['k_individual']:.2f} in "
+              f"{a['individual_fail_share']:.1%} of seeds; scaled chi^2 dof (median) "
+              f"{a['chi2_dof_median']:.1f}")
+        for n, label in (("mean_z_stat", "mean z / SE (t_199)"),
+                         ("mean_z2_stat", "mean z^2, chi^2 score"),
+                         ("mean_z2_normal", "mean z^2, normal approx.")):
+            print(f"        {label:<26} sd {a[n + '_sd']:.2f} [{a[n + '_sd_lo']:.2f}, "
+                  f"{a[n + '_sd_hi']:.2f}]  |.|>2 {a[n + '_gt2']:5.1%}  max |.| "
+                  f"{a[n + '_max_abs']:.2f}  |.|>=4: {a[n + '_ge4']}")
 
     # ---- QQ plot of the replication z's --------------------------------------------
     plt.rcParams.update({"font.size": 10, "axes.edgecolor": AXIS, "axes.labelcolor": INK,

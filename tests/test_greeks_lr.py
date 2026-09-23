@@ -5,6 +5,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from helpers import assert_within_se, smoothed_call_gamma_expectation
 
 import mcgreeks  # noqa: F401
 from mcgreeks.black_scholes import bs_digital_delta, bs_greeks, bs_price
@@ -30,15 +31,14 @@ def test_lr_and_pwlr_gamma_unbiased(K, T):
     g = exact(K, T, 0.2)["gamma"]
     for est in (lr_gamma_samples(100.0, 0.2, R, T, K, Z),
                 pwlr_gamma_samples(100.0, 0.2, R, T, K, Z)):
-        m, se = mean_se(est)
-        assert abs(m - g) < 4 * se
+        assert_within_se(*mean_se(est), g, reason=f"K={K} T={T}")
 
 
 @pytest.mark.parametrize("kind", ["call", "put"])
 def test_lr_delta_unbiased(kind):
     Z = normals(jax.random.PRNGKey(20), N)
-    m, se = mean_se(lr_delta_samples(100.0, 0.2, R, 1.0, 100.0, Z, kind=kind))
-    assert abs(m - exact(100.0, 1.0, 0.2, kind)["delta"]) < 4 * se
+    assert_within_se(*mean_se(lr_delta_samples(100.0, 0.2, R, 1.0, 100.0, Z, kind=kind)),
+                     exact(100.0, 1.0, 0.2, kind)["delta"], reason=kind)
 
 
 def test_lr_gamma_same_for_call_and_put():
@@ -46,8 +46,7 @@ def test_lr_gamma_same_for_call_and_put():
     Z = normals(jax.random.PRNGKey(21), N)
     diff = (lr_gamma_samples(100.0, 0.2, R, 1.0, 100.0, Z, kind="call")
             - lr_gamma_samples(100.0, 0.2, R, 1.0, 100.0, Z, kind="put"))
-    m, se = mean_se(diff)
-    assert abs(m) < 4 * se
+    assert_within_se(*mean_se(diff), 0.0, reason="call - put gamma")
 
 
 def test_pwlr_has_lower_variance_than_lr():
@@ -64,10 +63,9 @@ def test_parity_estimators_unbiased(K):
     g = exact(K, 1.0, 0.2)["gamma"]
     for est in (lr_gamma_parity_samples(100.0, 0.2, R, 1.0, K, Z),
                 pwlr_gamma_parity_samples(100.0, 0.2, R, 1.0, K, Z)):
-        m, se = mean_se(est)
-        assert abs(m - g) < 4 * se
-    m, se = mean_se(lr_digital_delta_parity_samples(100.0, 0.2, R, 1.0, K, Z))
-    assert abs(m - bs_digital_delta(100.0, K, R, 0.2, 1.0)) < 4 * se
+        assert_within_se(*mean_se(est), g, reason=f"parity gamma K={K}")
+    assert_within_se(*mean_se(lr_digital_delta_parity_samples(100.0, 0.2, R, 1.0, K, Z)),
+                     bs_digital_delta(100.0, K, R, 0.2, 1.0), reason=f"digital K={K}")
 
 
 @pytest.mark.parametrize("K", [80.0, 100.0, 120.0])
@@ -100,17 +98,28 @@ def test_parity_lr_has_lower_variance_in_the_money():
 
 
 def test_smoothed_price_converges_to_unsmoothed():
+    """Path by path, 0 <= eps softplus(x/eps) - max(x, 0) <= eps log 2 (the gap is
+    largest at x = 0), and the gap grows with eps (eps softplus(x/eps) is increasing in
+    eps: its eps-derivative is softplus(u) - u sigmoid(u) >= 0, u = x/eps). So on the
+    same paths the price gap is ordered in eps and bounded by e^{-rT} eps log 2: exact
+    inequalities, no tolerance."""
     Z = normals(jax.random.PRNGKey(23), N)
     raw = mc_price(100.0, 0.2, R, 1.0, 100.0, Z)
-    gaps = [abs(smooth_price_samples(100.0, 0.2, R, 1.0, 100.0, Z, e).mean() - raw)
-            for e in (2.0, 0.5, 0.05)]
-    assert gaps[0] > gaps[1] > gaps[2]
-    assert gaps[2] < 1e-3
+    eps = (2.0, 0.5, 0.05)
+    gaps = [float(smooth_price_samples(100.0, 0.2, R, 1.0, 100.0, Z, e).mean() - raw) for e in eps]
+    assert gaps[0] > gaps[1] > gaps[2] > 0
+    for e, gap in zip(eps, gaps):
+        assert gap <= np.exp(-R) * e * np.log(2) * (1 + 1e-12), (e, gap)
 
 
-def test_smoothed_gamma_nonzero_and_close_for_small_eps():
+def test_smoothed_gamma_matches_its_expectation():
+    """Softplus smoothing (eps = 0.5) is biased: its target is the gamma of the smoothed
+    price, computed by quadrature (helpers). The estimator must hit that within 4 SE;
+    the bias (-0.10% here) is O(eps^2): halving eps quarters it."""
     Z = normals(jax.random.PRNGKey(24), N)
-    m, se = mean_se(smooth_gamma_samples(100.0, 0.2, R, 1.0, 100.0, Z, 0.5))
+    target = smoothed_call_gamma_expectation(100.0, 0.2, R, 1.0, 100.0, 0.5)
+    assert_within_se(*mean_se(smooth_gamma_samples(100.0, 0.2, R, 1.0, 100.0, Z, 0.5)), target,
+                     reason="smoothed gamma vs smoothed target")
     g = exact(100.0, 1.0, 0.2)["gamma"]
-    assert m > 0
-    assert abs(m - g) < 4 * se + 1e-4  # small smoothing bias allowed
+    ratio = (target - g) / (smoothed_call_gamma_expectation(100.0, 0.2, R, 1.0, 100.0, 0.25) - g)
+    assert abs(ratio - 4.0) < 0.05, ratio

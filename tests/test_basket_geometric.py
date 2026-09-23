@@ -10,11 +10,13 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from helpers import P_FALSE_ALARM_4SE, assert_family, assert_within_se
 
 import mcgreeks  # noqa: F401
-from mcgreeks.basket import (basket_greeks_se, basket_price_L, corr_from_offdiag,
+from mcgreeks.basket import (basket_greeks_batches, basket_price_L, corr_from_offdiag,
                              example_basket, geometric_basket_greeks,
                              geometric_basket_price)
+from mcgreeks.stats import k_familywise
 from mcgreeks.black_scholes import bs_greeks, bs_price
 
 R, T, K = 0.05, 1.0, 100.0
@@ -73,20 +75,37 @@ def test_closed_form_corr_sensitivity_matches_bumping():
     np.testing.assert_allclose(g["corr"], fd, rtol=1e-7)
 
 
+GROUPS = ("price", "delta", "vega", "corr")
+
+
+def family(g, n):
+    """Stack a dict of price/delta/vega/corr into one (n, P) array (n = batches, or 1)."""
+    return np.concatenate([np.asarray(g[k]).reshape(n, -1) for k in GROUPS], axis=1)
+
+
+def test_familywise_thresholds():
+    """Sidak thresholds that give a whole family the false-alarm rate of ONE 4-SE check
+    (6.3e-5), for the d = 10 and d = 50 families (66 and 1,326 comparisons, t_199)."""
+    assert round(k_familywise(66, P_FALSE_ALARM_4SE, N_BATCHES - 1), 2) == 5.06
+    assert round(k_familywise(1326, P_FALSE_ALARM_4SE, N_BATCHES - 1), 2) == 5.68
+
+
 @pytest.mark.parametrize("d", [2, 10, 50])
 def test_mc_greeks_match_closed_form(d):
-    """Every Monte Carlo (pathwise AD) sensitivity within 4 batch-means SE of the exact
-    value: price, d deltas, d vegas, d(d-1)/2 correlation sensitivities (1,326 at d = 50).
-    See README (E9) for the family-wise false-alarm rate of this many comparisons."""
+    """All Monte Carlo (pathwise AD) sensitivities vs the closed form, as one family:
+    price, d deltas, d vegas, d(d-1)/2 correlation sensitivities (1,326 at d = 50).
+
+    Individual |z| below a family-wise threshold (Sidak; 5.06 at d = 10, 5.68 at d = 50;
+    d = 2, 6 comparisons, keeps the per-comparison 4), plus two aggregates over the
+    family that catch what individual thresholds miss: mean z (a bias with a common
+    sign) and mean z^2 (miscalibrated SEs, biases of mixed sign). docs/TESTING.md."""
     S0, sigma, rho, w = example_basket(d, seed(f"geo-basket-{d}"))
     Z = jax.random.normal(jax.random.PRNGKey(seed(f"geo-basket-Z-{d}")), (N, d),
                           dtype=jnp.float64)
-    mc = basket_greeks_se(S0, sigma, rho, R, T, K, w, Z, n_batches=N_BATCHES, geometric=True)
-    ex = geometric_basket_greeks(S0, sigma, rho, R, T, K, w)
-    for k in ("price", "delta", "vega", "corr"):
-        est, se = mc[k]
-        z = np.abs(np.asarray((est - ex[k]) / se))
-        assert np.all(z < 4), f"{k}: max |z| = {z.max():.2f} at index {np.argmax(z)}"
+    G = family(basket_greeks_batches(S0, sigma, rho, R, T, K, w, Z, N_BATCHES, True), N_BATCHES)
+    ex = family(geometric_basket_greeks(S0, sigma, rho, R, T, K, w), 1)[0]
+    k = 4.0 if d == 2 else k_familywise(G.shape[1], P_FALSE_ALARM_4SE, N_BATCHES - 1)
+    assert_family(G, ex, k=k, reason=f"d={d}")
 
 
 @pytest.mark.parametrize("geometric", [False, True])
@@ -111,5 +130,4 @@ def test_mc_perfect_correlation_is_black_scholes(geometric):
     est, se = b.mean(0), b.std(0, ddof=1) / np.sqrt(N_BATCHES)
     ex = bs_greeks(100.0, K, R, 0.2, T)
     exact = np.array([bs_price(100.0, K, R, 0.2, T), ex["delta"], ex["vega"]])
-    z = np.abs((np.asarray(est) - exact) / np.asarray(se))
-    assert np.all(z < 4), f"|z| (price, delta, vega) = {z}"
+    assert_within_se(est, se, exact, reason="(price, sum delta, sum vega)", dof=N_BATCHES - 1)

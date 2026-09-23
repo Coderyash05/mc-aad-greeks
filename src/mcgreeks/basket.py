@@ -86,10 +86,18 @@ def basket_greeks_se(S0, sigma, rho, r, T, K, w, Z, n_batches=200, geometric=Fal
     batches, z = error / SE is t-distributed with 199 degrees of freedom under the
     null, close to N(0, 1).
     """
-    Zb = Z.reshape(n_batches, -1, Z.shape[-1])
-    g = jax.lax.map(lambda z: basket_greeks(S0, sigma, rho, r, T, K, w, z, geometric), Zb)
+    g = basket_greeks_batches(S0, sigma, rho, r, T, K, w, Z, n_batches, geometric)
     return {k: (jnp.mean(v, axis=0), jnp.std(v, axis=0, ddof=1) / jnp.sqrt(n_batches))
             for k, v in g.items()}
+
+
+@partial(jax.jit, static_argnames=("n_batches", "geometric"))
+def basket_greeks_batches(S0, sigma, rho, r, T, K, w, Z, n_batches=200, geometric=False):
+    """Per-batch price and Greeks, arrays with a leading batch axis (n_batches, ...).
+    Needed for statements about the whole family of sensitivities (their correlations;
+    mcgreeks.stats.family_zscores)."""
+    Zb = Z.reshape(n_batches, -1, Z.shape[-1])
+    return jax.lax.map(lambda z: basket_greeks(S0, sigma, rho, r, T, K, w, z, geometric), Zb)
 
 
 def example_basket(d, seed):
