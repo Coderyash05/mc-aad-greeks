@@ -44,9 +44,10 @@ DIMS = [2, 5, 10, 20, 35, 50]
 MEM_BUDGET = {"fwd": 16e6, "vec": 16e6}
 RESULTS = Path(__file__).resolve().parents[1] / "results"
 
-# Fixed series order (slots 1-4). Reverse AD keeps the autodiff green and loop
-# bumping the finite-difference amber used in E3/E5.
-C_FWD, C_VEC, C_REV, C_LOOP = "#2a78d6", "#eb6834", "#1baf7a", "#eda100"
+# Project-wide method colours: forward AD blue, reverse AD aqua, CRN bumping amber.
+# Loop and vectorised bumping are the same estimator (same arithmetic), so they share
+# the amber and differ by line style and marker.
+C_FWD, C_REV, C_BUMP = "#2a78d6", "#1baf7a", "#eda100"
 INK, MUTED, GRID, AXIS, SURF = "#0b0b0b", "#898781", "#e1e0d9", "#c3c2b7", "#fcfcfb"
 
 METHODS = ("price", "rev", "fwd", "loop", "vec")
@@ -54,7 +55,8 @@ LABELS = {"fwd": "Forward-mode AD (one jvp per input)",
           "vec": "Bump-and-reprice, vectorised (vmap)",
           "rev": "Reverse-mode AD (one backward sweep)",
           "loop": "Bump-and-reprice, Python loop"}
-COLORS = {"fwd": C_FWD, "vec": C_VEC, "rev": C_REV, "loop": C_LOOP}
+COLORS = {"fwd": C_FWD, "vec": C_BUMP, "rev": C_REV, "loop": C_BUMP}
+STYLE = {"fwd": "-o", "vec": "--s", "rev": "-o", "loop": "-o"}
 
 
 def setup(d):
@@ -183,13 +185,14 @@ def plot(rows):
         y = np.array([r[f"{m}_x"] for r in rows])
         lo = y - np.array([r[f"{m}_q25_ms"] for r in rows]) / price
         hi = np.array([r[f"{m}_q75_ms"] for r in rows]) / price - y
-        a1.errorbar(P, y, yerr=[np.maximum(lo, 0), np.maximum(hi, 0)], fmt="-o", color=COLORS[m],
-                    lw=2, ms=4.5, elinewidth=1.2, capsize=0, label=LABELS[m])
+        a1.errorbar(P, y, yerr=[np.maximum(lo, 0), np.maximum(hi, 0)], fmt=STYLE[m],
+                    color=COLORS[m], lw=2, ms=4.5, elinewidth=1.2, capsize=0, label=LABELS[m])
     a1.set_title("Wall-clock time", loc="left", fontsize=11)
 
-    for m, ls in (("fwd", "-"), ("vec", "-"), ("rev", "-"), ("loop", "--")):
-        a2.plot(P, [r[f"{m}_flops_x"] for r in rows], ls, marker="o", color=COLORS[m], lw=2,
-                ms=4.5, label=LABELS[m] + (" (same arithmetic as vmap)" if m == "loop" else ""))
+    for m, label in (("fwd", LABELS["fwd"]), ("rev", LABELS["rev"]),
+                     ("loop", "Bump-and-reprice, loop or vmap (same arithmetic)")):
+        a2.plot(P, [r[f"{m}_flops_x"] for r in rows], STYLE[m], color=COLORS[m], lw=2,
+                ms=4.5, label=label)
     a2.set_title("Arithmetic (XLA flop count)", loc="left", fontsize=11)
 
     for ax in (a1, a2):
