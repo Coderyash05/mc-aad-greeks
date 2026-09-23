@@ -1,5 +1,7 @@
 """Paired bootstrap: exact ratio for identical methods, coverage, reproducibility."""
 import numpy as np
+from helpers import record
+from scipy import stats
 
 from mcgreeks.stats import paired_bootstrap, verdict
 
@@ -22,6 +24,9 @@ def test_ci_covers_true_rmse_about_95_percent():
         e = rng.normal(0.0, sigma, 200)
         lo, hi = paired_bootstrap({"m": e}, n_boot=2000, seed=rep)["methods"]["m"]["ci"]
         covered += lo <= sigma <= hi
+    # False-alarm probability of this band if coverage is exactly 95%, logged in the
+    # suite's budget (docs/TESTING.md).
+    record(1, stats.binom.cdf(179, 200, 0.95) + stats.binom.sf(198, 200, 0.95))
     assert 0.90 <= covered / 200 <= 0.99, covered
 
 

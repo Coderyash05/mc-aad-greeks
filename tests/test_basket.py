@@ -5,9 +5,10 @@ import numpy as np
 
 import mcgreeks  # noqa: F401
 import pytest
+from helpers import assert_within_se
 
-from mcgreeks.basket import (basket_dK, basket_greeks, basket_greeks_fwd, basket_price,
-                             bump_grad_loop, bump_grad_vmap, corr_from_offdiag,
+from mcgreeks.basket import (basket_dK, basket_greeks, basket_greeks_fwd, basket_greeks_se,
+                             basket_price, bump_grad_loop, bump_grad_vmap, corr_from_offdiag,
                              offdiag_from_corr)
 from mcgreeks.black_scholes import bs_greeks, bs_price
 
@@ -31,13 +32,14 @@ def test_corr_roundtrip():
 
 
 def test_one_asset_basket_is_black_scholes():
-    """With d = 1 the basket is a vanilla call: price, delta, vega must match."""
+    """With d = 1 the basket is a vanilla call: price, delta, vega within 4 batch-means
+    SE (200 batches, so z ~ t_199)."""
     S0, sigma, rho, w, Z = setup(1, n=1_000_000)
-    g = basket_greeks(S0, sigma, rho, R, T, K, w, Z)
+    g = basket_greeks_se(S0, sigma, rho, R, T, K, w, Z, n_batches=200)
     ex = bs_greeks(100.0, K, R, 0.2, T)
-    np.testing.assert_allclose(g["price"], bs_price(100.0, K, R, 0.2, T), rtol=5e-3)
-    np.testing.assert_allclose(g["delta"][0], ex["delta"], rtol=5e-3)
-    np.testing.assert_allclose(g["vega"][0], ex["vega"], rtol=5e-3)
+    assert_within_se(*g["price"], bs_price(100.0, K, R, 0.2, T), reason="price", dof=199)
+    assert_within_se(*g["delta"], ex["delta"], reason="delta", dof=199)
+    assert_within_se(*g["vega"], ex["vega"], reason="vega", dof=199)
 
 
 def test_autodiff_matches_crn_bumping():
@@ -95,7 +97,10 @@ def test_euler_homogeneity():
 
 
 def test_higher_correlation_raises_price():
-    """More correlation = less diversification = more basket variance = higher call price."""
+    """More correlation = less diversification = more basket variance = higher call price.
+    Each of the 10 correlation sensitivities must be positive by more than 4 batch-means
+    SE (significantly positive, not just positive by chance)."""
     S0, sigma, rho, w, Z = setup(5)
-    g = basket_greeks(S0, sigma, rho, R, T, K, w, Z)
-    assert jnp.all(g["corr"] > 0)
+    est, se = basket_greeks_se(S0, sigma, rho, R, T, K, w, Z, n_batches=200)["corr"]
+    z = np.asarray(est / se)
+    assert np.all(z > 4), f"min z = {z.min():.1f}"

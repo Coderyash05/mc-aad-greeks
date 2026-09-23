@@ -5,6 +5,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from helpers import assert_within_se
 
 import mcgreeks  # noqa: F401
 from mcgreeks.asian import asian_greeks_se, asian_payoffs, asian_price, geometric_asian_price
@@ -34,8 +35,8 @@ def test_closed_form_below_european():
 @pytest.mark.parametrize("K", [90.0, 100.0, 110.0])
 def test_geometric_price_matches_closed_form(M, K):
     x = asian_payoffs(100.0, 0.2, R, T, K, _Z(f"geo-price-{M}-{K}", M), geometric=True)
-    m, se = jnp.mean(x), jnp.std(x, ddof=1) / jnp.sqrt(N)
-    assert abs(m - geometric_asian_price(100.0, K, R, 0.2, T, M)) < 4 * se
+    assert_within_se(jnp.mean(x), jnp.std(x, ddof=1) / jnp.sqrt(N),
+                     geometric_asian_price(100.0, K, R, 0.2, T, M), reason=f"M={M} K={K}")
 
 
 @pytest.mark.parametrize("M", [12, 52])
@@ -45,7 +46,7 @@ def test_geometric_greeks_match_closed_form(M, K):
     est = asian_greeks_se(100.0, 0.2, R, T, K, _Z(f"geo-greeks-{M}-{K}", M), geometric=True)
     exact = jax.grad(geometric_asian_price, argnums=(0, 3))(100.0, K, R, 0.2, T, M)
     for (name, (m, se)), ex in zip(est.items(), exact):
-        assert abs(m - ex) < 4 * se, f"{name}: MC {m} +/- {se}, exact {ex}"
+        assert_within_se(m, se, ex, reason=f"{name} M={M} K={K}")
 
 
 @pytest.mark.parametrize("M", [12, 52])

@@ -24,6 +24,7 @@ Resampling uses numpy's Generator(PCG64) with a fixed integer seed: deterministi
 and independent of the JAX PRNG streams that produced the paths.
 """
 import numpy as np
+from scipy import stats
 
 
 def paired_bootstrap(errors_by_method, n_boot=2000, seed=0, reference=None, level=0.95):
@@ -96,3 +97,71 @@ def verdict(result, method):
     if r["beaten_by_reference"]:
         return f"worse than {ref}"
     return f"not distinguishable from {ref}"
+
+
+# ---- families of correlated comparisons ---------------------------------------------
+# A "family" is P estimates computed from the same B independent batches (e.g. all
+# 2d + d(d-1)/2 basket sensitivities). G[b, k] is the batch-b estimate of quantity k;
+# the estimate is the batch mean, SE_k = sd_b(G[:, k]) / sqrt(B), and
+# z_k = (mean_k - exact_k) / SE_k ~ t_{B-1} for each k. The z_k are CORRELATED (the same
+# paths drive all of them), which matters for any statement about the whole family.
+
+def k_familywise(P, alpha, dof=None):
+    """Per-comparison threshold k with P(any |z_k| >= k) <= alpha for P comparisons:
+    Sidak, 1 - (1 - alpha)^(1/P) per comparison. Exact for independent z_k and
+    conservative for positively dependent ones (Sidak 1967), so it controls the
+    family-wise false-alarm rate here."""
+    p = 1.0 - (1.0 - alpha) ** (1.0 / P)
+    return float(stats.norm.isf(p / 2) if dof is None else stats.t.isf(p / 2, dof))
+
+
+def family_zscores(G, exact):
+    """z-scores of a family and two aggregate statistics with correct (dependent) SEs.
+
+    G: (B, P) batch estimates; exact: (P,).
+    Returns z (P,), and
+      mean_z, se_mean_z: mean_k z_k = mean_b u_b with u_b = (1/P) sum_k (G[b,k] - exact_k)/SE_k,
+          a fixed linear combination of the estimates (weights 1/(P SE_k)), so its SE
+          is sd_b(u_b)/sqrt(B): this accounts for every correlation between the z_k.
+          Under no bias, mean_z / se_mean_z ~ t_{B-1}. Detects a bias with a common sign.
+      mean_z2, expected_mean_z2, sd_mean_z2: mean_k z_k^2 has expectation nu/(nu - 2),
+          nu = B - 1 (t_nu), and, for jointly Gaussian estimates with correlations rho_ij,
+              Var(mean z^2) = (1/P^2) [ P v + 2 sum_{i != j} rho_ij^2 ],
+          v = Var(t_nu^2) = 2 nu^2 (nu - 1) / ((nu - 2)^2 (nu - 4)) (Isserlis: Cov(z_i^2,
+          z_j^2) = 2 rho_ij^2). rho_ij^2 is estimated from the batches, bias-corrected with
+          E[r^2] ~ rho^2 + (1 - rho^2)^2/(B - 1) ~ rho^2 + 1/(B - 1) for small rho:
+          rho^2_hat = ((B - 1) r^2 - 1)/(B - 2). sum_{i,j} r_ij^2 = ||Xs Xs^T||_F^2/(B - 1)^2
+          with Xs the standardised (B, P) batch matrix: a B x B computation, not P x P.
+          Detects SEs that are systematically wrong, and biases of mixed sign that
+          cancel in mean_z.
+      chi2_scale a, chi2_dof f, mean_z2_score: mean z^2 is positive and right-skewed
+          (with correlated z_k its effective degrees of freedom are few: f ~ 2.3 at
+          d = 2, ~39 at d = 50 for the E9 baskets), so a normal approximation
+          understates its upper tail. It is matched instead to a scaled chi-square
+          a chi^2_f with the same mean and variance (Satterthwaite 1946; Box 1954):
+          a f = E, 2 a^2 f = Var  ->  f = 2 E^2 / Var, a = Var / (2 E).
+          mean_z2_score = Phi^{-1}(F_{chi^2_f}(mean_z2 / a)) is ~N(0, 1) if the
+          approximation holds (validated over 200 seeds in E9 (c)).
+    """
+    G = np.asarray(G, dtype=float)
+    ex = np.asarray(exact, dtype=float)
+    B, P = G.shape
+    est = G.mean(0)
+    se = G.std(0, ddof=1) / np.sqrt(B)
+    z = (est - ex) / se
+    u = ((G - ex) / se).mean(1)                       # (B,): mean over k, per batch
+    nu = B - 1
+    Xs = (G - est) / G.std(0, ddof=1)
+    gram = Xs @ Xs.T / (B - 1)                        # (B, B)
+    sum_r2_off = float(np.sum(gram**2)) - P           # sum_{i != j} r_ij^2
+    n_off = P * (P - 1)
+    sum_rho2_off = max(((B - 1) * sum_r2_off - n_off) / (B - 2), 0.0)
+    v = 2 * nu**2 * (nu - 1) / ((nu - 2) ** 2 * (nu - 4))
+    E, var = nu / (nu - 2), (P * v + 2 * sum_rho2_off) / P**2
+    f, a = 2 * E**2 / var, var / (2 * E)
+    mean_z2 = float(np.mean(z**2))
+    return {"z": z, "mean_z": float(u.mean()), "se_mean_z": float(u.std(ddof=1) / np.sqrt(B)),
+            "mean_z2": mean_z2, "expected_mean_z2": E, "sd_mean_z2": float(np.sqrt(var)),
+            "chi2_dof": float(f), "chi2_scale": float(a),
+            "mean_z2_score": float(stats.norm.ppf(stats.chi2.cdf(mean_z2 / a, f))),
+            "dof": nu, "P": P}

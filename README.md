@@ -12,6 +12,7 @@ and compared against finite differences, likelihood-ratio estimators and Black-S
 - [x] Digital options, with bootstrap CIs (E5)
 - [x] Basket option and cost scaling: forward vs reverse vs bumping (E6, E6b)
 - [x] Basket Greek accuracy against the geometric-basket closed form, d = 2, 10, 50 (E9)
+- [x] Test hygiene: no absolute floors, rare-event checks, false-alarm budget ([docs/TESTING.md](docs/TESTING.md))
 - [x] Memory: chunked adjoint, sqrt(M) checkpointing, end-to-end cost (E7)
 - [x] Robustness across strikes and maturities (E8), including parity-switched LR / pathwise-LR
 
@@ -351,8 +352,9 @@ plumbing and all d(d-1)/2 correlation sensitivities.
 both signs), 200,000 paths, SE by batch means over 200 batches, so
 z = (MC - exact) / SE ~ t_199.
 
-**Tests** (`tests/test_basket_geometric.py`): every sensitivity within 4 SE at d = 2,
-10, 50; closed form = Black-Scholes at d = 1 and at correlation 1 with equal vols (to
+**Tests** (`tests/test_basket_geometric.py`): all sensitivities at d = 2, 10, 50 as one
+family: each within a family-wise threshold (4, 5.06, 5.68 SE), plus mean z and mean z²
+over the family (see docs/TESTING.md); closed form = Black-Scholes at d = 1 and at correlation 1 with equal vols (to
 1e-12); Monte Carlo at correlation 1 = Black-Scholes within 4 SE (arithmetic and
 geometric; the singular correlation matrix gets its Cholesky factor directly, a column
 of ones).
@@ -376,13 +378,23 @@ noise. Repeating the whole experiment on 200 seeds gives independent z's:
 | 10 | 1.01 [0.94, 1.08] | 4.4% [3.6, 5.3] | +0.02 [-0.04, +0.07] | 0.0% [0.0, 1.8] / 0.6% |
 | 50 | 1.03 [1.00, 1.06] | 5.0% [4.6, 5.4] | -0.00 [-0.02, +0.02] | 2.5% [0.8, 5.7] / 11.2% |
 
+Against the closed-form geometric basket, all 1,326 sensitivities at d = 50 have
+z-scores consistent with t₁₉₉ across 200 independent seeds (mean z² = 1.03 [1.00, 1.06],
+mean z = -0.00 [-0.02, +0.02]), confirming no detectable bias and correctly calibrated
+standard errors.
+
 - **No bias and calibrated SEs** at every d, for every group (price, deltas, vegas,
   correlations; per-group rows in `e9_calibration.csv`): the Monte Carlo reverse-mode
   Greeks of the basket are right, including all 1,225 correlation sensitivities at d = 50.
-- **The 4-SE test is not free of false alarms at d = 50:** on a fresh seed it would fail
-  about 2.5% of the time [0.8%, 5.7%] with a correct estimator. The independence bound
-  (11%) overstates this because the sensitivities are correlated. The test seed passes;
-  Phase 5 (test hygiene) will set family-wise thresholds.
+- **A plain 4-SE test is not free of false alarms at d = 50:** on a fresh seed it would
+  fail about 2.5% of the time [0.8%, 5.7%] with a correct estimator. The independence
+  bound (11%) overstates this because the sensitivities are correlated.
+  - The test therefore uses family-wise thresholds (Šidák: 5.68 SE at d = 50), plus two
+    aggregate checks over the family, mean z and mean z², with SEs that account for
+    the correlations.
+  - On 200 seeds, both aggregates are ≈ N(0, 1) and there are no individual failures
+    (`results/e9_aggregate.csv`, E9 (c)).
+  - The false-alarm budget of the whole suite is in [docs/TESTING.md](docs/TESTING.md).
 
 ![E9](results/e9_qq.png)
 
