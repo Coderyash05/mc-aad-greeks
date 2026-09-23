@@ -19,6 +19,16 @@ def mc_price(S0, sigma, r, T, K, Z, kind="call"):
     return jnp.mean(discounted_payoffs(S0, sigma, r, T, K, Z, kind))
 
 
+@jax.jit
+def mc_price_strikes(S0, sigma, r, T, strikes, Z):
+    """Calls at every strike in `strikes` on the same paths: K prices, shape (K,).
+
+    Many outputs, one input (S0): the regime where forward-mode AD wins.
+    """
+    ST = gbm_terminal(S0, sigma, r, T, Z)
+    return jnp.exp(-r * T) * jnp.mean(jnp.maximum(ST[:, None] - strikes[None, :], 0.0), axis=0)
+
+
 @partial(jax.jit, static_argnames="kind")
 def mc_price_se(S0, sigma, r, T, K, Z, kind="call"):
     """Price estimate and its standard error, std / sqrt(N)."""

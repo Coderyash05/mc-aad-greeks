@@ -4,7 +4,10 @@ import jax.numpy as jnp
 import numpy as np
 
 import mcgreeks  # noqa: F401
-from mcgreeks.basket import (basket_dK, basket_greeks, basket_price, corr_from_offdiag,
+import pytest
+
+from mcgreeks.basket import (basket_dK, basket_greeks, basket_greeks_fwd, basket_price,
+                             bump_grad_loop, bump_grad_vmap, corr_from_offdiag,
                              offdiag_from_corr)
 from mcgreeks.black_scholes import bs_greeks, bs_price
 
@@ -54,6 +57,29 @@ def test_autodiff_matches_crn_bumping():
                   - basket_price(*args_dn, R, T, K, w, Z)) / (2 * h)
             np.testing.assert_allclose(g[name][i], fd, rtol=1e-4, atol=1e-6,
                                        err_msg=f"{name}[{i}]")
+
+
+# d = 4: P = 14 sensitivities, 2P + 1 = 29 bumped pricings. chunk=5 divides
+# neither, so lax.map's remainder batch is exercised too.
+@pytest.mark.parametrize("chunk", [None, 5])
+def test_forward_mode_equals_reverse_mode(chunk):
+    S0, sigma, rho, w, Z = setup(4, n=50_000)
+    rev = basket_greeks(S0, sigma, rho, R, T, K, w, Z)
+    price, grad = basket_greeks_fwd(S0, sigma, rho, R, T, K, w, Z, chunk=chunk)
+    np.testing.assert_allclose(price, rev["price"], rtol=1e-10)
+    np.testing.assert_allclose(grad, jnp.concatenate([rev["delta"], rev["vega"], rev["corr"]]),
+                               rtol=1e-10, atol=1e-12)
+
+
+@pytest.mark.parametrize("chunk", [None, 5])
+def test_vectorised_bumping_equals_loop(chunk):
+    """Same bumps, same Z: only the dispatch differs, so agreement is to rounding.
+    Rounding in a price (~1e-15) is amplified by 1/(2h) = 5e3, hence atol 1e-10."""
+    S0, sigma, rho, w, Z = setup(4, n=50_000)
+    p_loop, g_loop = bump_grad_loop(S0, sigma, rho, R, T, K, w, Z, h=1e-4)
+    p_vec, g_vec = bump_grad_vmap(S0, sigma, rho, R, T, K, w, Z, h=1e-4, chunk=chunk)
+    np.testing.assert_allclose(p_vec, p_loop, rtol=1e-12)
+    np.testing.assert_allclose(g_vec, g_loop, rtol=0, atol=1e-10)
 
 
 def test_euler_homogeneity():

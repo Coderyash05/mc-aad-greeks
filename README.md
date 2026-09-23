@@ -6,11 +6,11 @@ and compared against finite differences, likelihood-ratio estimators and Black-S
 ## Status
 
 - [x] European call/put pricer (GBM, vectorised, jit-compiled), validated against Black-Scholes (E1)
-- [x] Autodiff delta, vega, rho with standard errors, validated against Black-Scholes
-- [x] Finite-difference baseline (CRN and independent seeds), error vs bump size (E2)
-- [x] Gamma: naive AD vs LR vs pathwise-LR vs smoothing (E3, E4)
-- [x] Digital options: autodiff delta fails, LR / smoothing / FD compared (E5)
-- [x] Basket option: all deltas, vegas, correlation sensitivities in one pass; cost scaling (E6)
+- [ ] Autodiff delta, vega, rho
+- [ ] Finite-difference baseline (CRN and independent seeds)
+- [ ] Gamma: naive AD vs LR vs pathwise-LR vs smoothing
+- [ ] Digital options
+- [ ] Basket option and cost scaling
 
 ## Setup
 
@@ -22,120 +22,165 @@ pytest
 python experiments/e1_validation.py
 ```
 
-## E1: pricer validation
+## Timing protocol
 
-54 cases (call/put, K in {80, 100, 120}, T in {0.25, 1, 2}, sigma in {0.1, 0.2, 0.4}),
-S0 = 100, r = 5%, 1,000,000 paths each, independent seeds per case.
-Result: all 54 within 3 standard errors of Black-Scholes. Full table in `results/e1_prices.csv`.
+Every timing is measured after compilation, over repeated runs (at least 3 for the
+slow cases, up to 200 for the fast ones), with Python's GC off; the median and
+interquartile range (IQR) are reported (`src/mcgreeks/bench.py`). Operation counts
+come from XLA's `compile().cost_analysis()`, which works on CPU; it counts a loop
+body once regardless of trip count, so counts for chunked programs are read from
+the equivalent loop-free program. Hardware for the numbers below: Intel Core
+i7-13700HX (`os.cpu_count()` = 24), Windows 11, Python 3.12.10, JAX 0.11.2, CPU backend
+(`results/e1_hardware.json`, `results/e6_hardware.json`, `results/e6b_hardware.json`).
+Timings are hardware-dependent; the flop, transcendental and byte counts are not.
+Each figure can be redrawn from its CSV with `--plot-only` (E6, E6b).
 
-## E1: autodiff Greeks
+## Forward vs reverse mode: which one should win
 
-Delta, vega and rho from one `jax.value_and_grad` call (pathwise estimator), with
-standard errors from per-path gradients (`jax.vmap`). Same 54-case grid, 1,000,000 paths,
-independent seeds. Every Greek within 3 SE of Black-Scholes; mean z between -0.26 and +0.04.
-Cases where the per-path estimator is constant (every path in or out of the money,
-e.g. deep ITM call rho = K T e^{-rT}) have zero variance and are reported separately.
-Full table: `results/e1_greeks.csv`.
+Cost model (Griewank & Walther 2008; Capriotti 2011, sec. 3; Giles & Glasserman 2006):
+for a program with n inputs and m outputs, forward (tangent) mode needs one sweep per
+**input**, each ~1-2x one evaluation, while reverse (adjoint) mode needs one sweep per
+**output**, ~3-4x one evaluation in total. A price is one scalar output, so **reverse
+mode is expected to beat forward mode for any n >= 2 inputs** (close at n = 2, clear
+from n = 3). Forward mode wins when outputs outnumber inputs (E6b). The experiments
+below confirm both regimes; neither result is a surprise.
 
-Cost with 3 Greeks (Windows, 24-thread CPU, N = 1,000,000): autodiff 7.9x one pricing,
-central-difference bumping 7.4x. With three parameters the two cost about the same;
-reverse mode's advantage is that its cost does not grow with the number of parameters
-(see the basket experiment). Timings are machine-dependent.
+## E1: pricer validation and the cost of 3 Greeks
 
-## E2: finite differences vs autodiff
+Price + delta, vega, rho of one call, N = 1,000,000 (`results/e1_timing.csv`):
 
-![E2](results/e2_fd_vs_ad.png)
+| Method | Median ms [IQR] | x one pricing (time) | x one pricing (flops) | exp/log evaluations |
+|---|---|---|---|---|
+| Price only | 0.50 [0.47, 0.56] | 1.0 | 1.0 | 1x |
+| Forward-mode AD (3 jvps) | 5.03 [4.44, 5.57] | 10.1 | 6.6 | 1x |
+| Reverse-mode AD | 4.15 [3.92, 4.84] | 8.4 | 4.3 | 1x |
+| Bumping, Python loop (7 pricings) | 4.42 [4.31, 4.56] | 8.9 | 7.0 | 7x |
+| Bumping, vmapped (7 pricings) | 5.06 [4.79, 5.52] | 10.2 | 7.0 | 7x |
 
-ATM call, 500 independent batches of 20,000 paths, RMSE against Black-Scholes.
+- **Reverse beats forward with 3 inputs and one output, as the cost model predicts:**
+  4.3x vs 6.6x one pricing in flops (~1.9 pricings per forward tangent). None of four
+  forward formulations did better: vmapped jvps and `jacfwd` were within noise of
+  each other, and 3 separate or scalar jvps were slower.
+- The flop ratios are exact and machine-independent. The time ratios are not stable:
+  the denominator is a 0.5 ms pricing that moves by 20-25% between runs. A second run
+  on the same machine gave price 0.63 ms and reverse 6.7x, forward 8.6x, loop 7.3x,
+  vmap 8.4x. Before this change (mean of 50 runs, two methods): reverse 7.9x, bumping 7.4x.
+- With only 3 inputs, reverse AD and bumping are within noise in wall-clock. The
+  wall-clock ratios sit above the flop ratios because a European pricing is only ~7
+  flops per path. It is limited by memory traffic, not arithmetic (see the roofline below).
 
-| Estimator | Best h | RMSE |
-|---|---|---|
-| Delta, FD independent seeds | 10 | 0.0113 |
-| Delta, FD common random numbers | 2.5 | 0.0040 |
-| Delta, autodiff (pathwise) | none | 0.0041 |
-| Gamma, FD independent seeds | 16 | 0.0013 |
-| Gamma, FD common random numbers | 6.3 | 0.0003 |
-| Gamma, autodiff (naive) | none | 0.0188 (returns exactly 0) |
+## E6: basket call, forward vs reverse vs bumping
 
-- Independent seeds: error grows like 1/h (delta) and 1/h^2 (gamma) as h shrinks,
-  because noise that does not cancel is divided by the bump. The optimum is a large,
-  biased bump, and the error there is ~3x worse than autodiff.
-- CRN: delta converges to the pathwise (autodiff) estimator as h -> 0, with the same
-  error. It needs a tuned h and two repricings per parameter; autodiff needs neither.
-- Gamma with CRN grows like h^(-1/2) as h shrinks: only paths within h of the strike
-  contribute, each with a 1/h-sized term.
-- Naive autodiff gamma is exactly 0 on every batch (the payoff's second derivative is
-  zero almost everywhere). Fixed in the next step.
-
-## E3 + E4: fixing autodiff gamma
-
-![E3/E4](results/e3_e4_gamma.png)
-
-Same 500 x 20,000 random numbers as E2. Exact gamma 0.01876.
-
-| Estimator | Bias | Std | RMSE |
-|---|---|---|---|
-| Autodiff, naive | -1.9e-02 | 0 | 0.01876 |
-| FD, CRN (h = 6.31) | -9.8e-05 | 0.00028 | 0.00029 |
-| Likelihood ratio | 2.1e-05 | 0.00095 | 0.00094 |
-| **Pathwise-LR (mixed)** | 1.4e-05 | 0.00026 | **0.00026** |
-| Autodiff, softplus-smoothed (eps = 1.6) | -1.9e-04 | 0.00027 | 0.00033 |
-
-- Naive autodiff returns exactly 0: the payoff's second derivative is a Dirac delta
-  at the strike, which differentiating the code cannot see.
-- Likelihood ratio is unbiased for any payoff but has ~3.6x the noise of the others.
-- Pathwise-LR (pathwise delta, then one LR step) is unbiased and has the lowest RMSE,
-  beating the best-tuned finite difference.
-- Smoothing lets plain autodiff work, with the same bias-variance trade-off as a bump
-  size: bias grows with eps, noise grows as eps shrinks, optimum eps ~ 1.6. Its best
-  RMSE is close to, but not better than, FD with CRN.
-- For small eps the measured bias is below the detection limit of 500 batches
-  (dotted line); those points are noise, not a real bias.
-
-## E5: digital options (autodiff delta fails)
-
-![E5](results/e5_digital.png)
-
-Cash-or-nothing call paying 1 if S_T > K, ATM. Exact delta 0.01876. Same random numbers as E2-E4.
-
-| Estimator | Bias | Std | RMSE |
-|---|---|---|---|
-| Autodiff, naive (pathwise) | -1.9e-02 | 0 | 0.01876 |
-| FD, CRN (best h = 4) | -1.1e-04 | 0.00031 | 0.00033 |
-| Autodiff, sigmoid-smoothed (best eps = 1.6) | -2.0e-04 | 0.00027 | 0.00034 |
-| **Likelihood ratio** | 1.2e-05 | 0.00020 | **0.00020** |
-
-- The payoff jumps at the strike and is flat elsewhere, so every path's derivative is 0:
-  autodiff returns exactly 0 even for a first-order Greek.
-- The likelihood ratio needs no smoothness and no tuning, and wins outright here.
-- Smoothing and FD have the same U-shaped trade-off and reach similar best errors.
-- At K = S0 the digital delta equals the vanilla call gamma (both 0.01876), since
-  S0 phi(d1) = K e^{-rT} phi(d2) when K = S0. The two problems are the same
-  maths: differentiating through a jump at the strike. That is why E3 and E5
-  produce nearly identical numbers.
-
-## E6: basket option, where autodiff pays off
+For d assets there are P = d deltas + d vegas + d(d-1)/2 correlation sensitivities of
+one output. `python experiments/e6_basket.py`, N = 100,000 paths, h = 1e-4. Forward
+mode and vectorised bumping run in chunks. The budget (16 MB per batched array) is the
+fastest of 16 / 64 / 256 MB in `experiments/e6_chunk_sweep.py` (table below).
 
 ![E6](results/e6_basket.png)
 
-Basket call on d correlated GBM assets (equal weights, correlation 0.5, vols 15-35%),
-100,000 paths. No closed form, so Monte Carlo is actually needed here. One `jax.grad`
-call returns all P = d deltas + d vegas + d(d-1)/2 correlation sensitivities.
-All timings measured (Linux CPU; rerun on your own machine, numbers vary):
+Cost in units of one pricing, median wall-clock [IQR] and XLA flops:
 
-| Assets d | Sensitivities P | Autodiff (x one pricing) | Bumping (x one pricing) | AD speedup |
+| d | P | Reverse AD | Forward AD | Bump, loop | Bump, vmap | Flops: rev / fwd / bump |
+|---|---|---|---|---|---|---|
+| 2 | 5 | 2.9 [2.8, 3.0] | 5.4 [5.2, 5.7] | 11.0 [10.8, 11.2] | 8.3 [8.0, 8.6] | 2.9 / 8.4 / 11 |
+| 5 | 20 | 2.8 [2.8, 2.9] | 18 [18, 19] | 44 [42, 46] | 49 [49, 51] | 2.4 / 27 / 41 |
+| 10 | 65 | 3.4 [3.1, 3.5] | 55 [54, 55] | 167 [163, 171] | 170 [167, 173] | 2.2 / 79 / 131 |
+| 20 | 230 | 3.7 [3.6, 3.7] | 202 [201, 203] | 484 [479, 487] | 764 [759, 771] | 2.1 / 256 / 461 |
+| 35 | 665 | 3.8 [3.8, 3.9] | 638 [636, 639] | 1,313 [1,301, 1,313] | 2,236 [2,233, 2,237] | 2.1 / 710 / 1,331 |
+| 50 | 1,325 | 4.2 [4.0, 4.3] | 1,359 [1,359, 1,359] | 2,666 [2,662, 2,676] | 4,629 [4,597, 4,637] | 2.05 / 1,389 / 2,650 |
+
+- **Reverse mode is flat; forward mode and bumping grow linearly in P**, reproducing the
+  shape of Giles & Glasserman (2006), Fig. 4. Reverse AD costs 2.8-4.2x one pricing in
+  time and 2.05-2.9x in flops for any P. Forward AD costs ~1.05-1.7 pricings of
+  arithmetic per input, about half of bumping's 2 per input.
+- At d = 50: reverse AD 27 ms; forward AD 8.8 s (325x slower); loop bumping 17.3 s
+  (637x; 633x before Phase 1); vmapped bumping 30.0 s (1,106x).
+- All four give the same gradient: forward vs reverse to <= 4.5e-14, vmapped vs loop
+  bumping to <= 8.9e-12 (tested in `tests/test_basket.py`). Bumping vs AD differs by
+  <= 2.2e-4, the O(h^2) and kink-path error of central differences.
+- **AD evaluates every exp once; bumping evaluates it 2P + 1 times.** XLA's
+  transcendental count is exactly 1.00x one pricing for both reverse and forward AD
+  at every d. Bumping's count is 2P + 1 (2,651x at d = 50). The derivative of exp
+  reuses the value already computed on the forward sweep (cf. Giles & Glasserman 2006,
+  sec. 7).
+- **Reverse-mode flops match the literature; its wall-clock is set by memory traffic.**
+  The flop ratio falls to 2.05x at d = 50. That is consistent with Capriotti's (2011,
+  Fig. 9b) ~2.3x for basket deltas and vegas, though his figure is a timing of
+  hand-coded or tool-generated adjoints and ours is a flop count that also includes the
+  correlation sensitivities through the Cholesky factor. The wall-clock ratio is higher
+  (4.2x at d = 50) because reverse mode stores the forward sweep's intermediates and
+  reads them back. XLA's bytes-accessed count is 3.80x one pricing at every d, and the
+  wall-clock ratio tracks it for d >= 10 (3.4-4.2x). At d <= 5 the N x d arrays
+  (<= 4 MB) fit in cache and the ratio is lower (2.8-2.9x). Reducing that stored
+  state is Phase 2.
+- What the benchmark does not claim: the bumps reprice from scratch (generic black-box
+  bumping). A hand-written bump could reuse `Z @ L.T` for the delta and vega bumps;
+  that is a smarter algorithm, not a fairer benchmark of the same one.
+
+### Vectorised bumping, chunk sizes and the roofline
+
+`python experiments/e6_chunk_sweep.py` (`results/e6_chunk_sweep.csv`,
+`results/e6_roofline.csv`). Cost in units of one pricing, median [IQR]:
+
+| d | Loop bumping | vmap, 16 MB | vmap, 64 MB | vmap, 256 MB | Forward, 16 MB | Forward, 256 MB |
+|---|---|---|---|---|---|---|
+| 20 | 445 | 696 [694, 698] (chunk 1) | 696 [693, 699] (chunk 4) | 954 [953, 954] (chunk 16) | 202 (chunk 1) | 329 (chunk 16) |
+| 50 | 2,657 | 4,608 [4,601, 4,611] (chunk 1) | same program as 16 MB | 4,888 [4,880, 4,892] (chunk 6) | 1,378 (chunk 1) | 1,733 (chunk 6) |
+
+Smaller chunks are faster for both chunked methods. Even at its best, **vectorised
+bumping is slower than the Python loop for d >= 20** (0.58-0.64x the loop's speed).
+It is faster only at d = 2 (1.32x) and roughly equal at d = 5-10 (0.90-0.98x).
+
+Why: on this CPU the pricing is memory-bandwidth-bound. Throughput from XLA's flop
+and bytes-accessed counts, divided by median time:
+
+| d | Program | GFLOP/s (% of GEMM peak) | GB/s (% of triad) | flops per byte |
 |---|---|---|---|---|
-| 2 | 5 | 2.4 | 8.7 | 3.6x |
-| 5 | 20 | 3.3 | 50 | 15x |
-| 10 | 65 | 3.1 | 148 | 47x |
-| 20 | 230 | 6.9 | 570 | 82x |
-| 35 | 665 | 6.1 | 1,435 | 235x |
-| 50 | 1,325 | 4.1 | 2,506 | 608x |
+| 20 | one pricing | 31 (7%) | 28 (113%) | 1.1 |
+| 20 | loop bumping | 32 (7%) | 29 (117%) | 1.1 |
+| 20 | vmap bumping | 21 (5%) | 15 (60%) | 1.4 |
+| 20 | reverse AD | 19 (4%) | 31 (124%) | 0.6 |
+| 50 | one pricing | 82 (18%) | 31 (125%) | 2.6 |
+| 50 | loop bumping | 81 (18%) | 31 (125%) | 2.6 |
+| 50 | vmap bumping | 47 (11%) | 14 (58%) | 3.3 |
+| 50 | reverse AD | 40 (9%) | 28 (114%) | 1.4 |
 
-- Bumping costs 2P + 1 pricings, exactly as theory says (dotted line).
-- Autodiff stays between 2x and 7x one pricing whatever P is: 1,325 sensitivities
-  for about the cost of 4 pricings. At d = 50 that is 0.19 s against 116 s.
-- Correctness without a closed form is checked three ways (`tests/test_basket.py`):
-  d = 1 reduces to Black-Scholes; autodiff equals CRN bumping to ~1e-5; and Euler's
-  theorem V = sum_i S0_i dV/dS0_i + K dV/dK holds to 1e-10 (the price is
-  homogeneous of degree 1 in spots and strike).
+The machine reference is a float64 streaming triad `y = 2x + z` at 25 GB/s (the
+bandwidth JAX achieves here) and a 4096 x 4096 GEMM at 446 GFLOP/s. The pricing and
+the loop run at the streaming bandwidth (above 100% because XLA's byte count is a
+model, and some traffic hits cache) and at 7-18% of peak arithmetic.
+**Batching the bumps cannot help a bandwidth-bound kernel.** Each bump still has to
+stream its own N x d arrays (bytes drop only to 0.8x the loop's). On XLA:CPU the
+batched program also reaches only ~60% of the streaming bandwidth: a batched
+`Z @ L.T` ran ~1.9x slower than the same number of single GEMMs (99 ms vs 53 ms for
+12 at d = 50). This is specific to this backend; on a GPU the balance may differ. In
+all cases vectorised bumping does 2P + 1 pricings of work, so its cost grows linearly
+in P.
+
+## E6b: the forward-mode regime (many outputs, one input)
+
+`python experiments/e6b_forward_regime.py`: K European calls with strikes over
+70..130, one spot, N = 100,000. The K deltas form one Jacobian column: forward mode
+gets it from one jvp, and reverse mode needs K pullbacks (what `jax.jacrev` does).
+Cost is in units of one pricing of all K strikes; forward and reverse agree to
+<= 3.3e-16.
+
+![E6b](results/e6b_forward_regime.png)
+
+| K | Forward AD, time [IQR] | Reverse AD, time [IQR] | Flops: fwd / rev | Temp memory fwd / rev |
+|---|---|---|---|---|
+| 1 | 5.1 [5.0, 5.4] | 5.6 [5.2, 5.8] | 2.3 / 2.5 | 3 / 3 MB |
+| 10 | 10.5 [9.6, 11.0] | 51 [50, 53] | 3.2 / 8.9 | 25 / 25 MB |
+| 100 | 31 [30, 32] | 1,269 [1,257, 1,269] | 3.3 / 69 | 241 / 241 MB |
+| 1,000 | 43 [43, 44] | 17,261 [16,566, 17,818] | 3.3 / 669 | 2.4 / 2.4 GB |
+
+- **The mirror image of E6:** forward-mode flops are flat (2.3-3.3x), and reverse-mode
+  flops grow linearly in K (~0.67 K). At K = 1,000, forward mode takes 0.23 s and
+  reverse mode 92 s. With 1 output and 1 input (K = 1) the two are equal within noise.
+- **Negative result: forward mode is flat in flops but not in wall-clock** (5x to 43x).
+  The K-strike price fuses into one pass and never stores the N x K payoff matrix
+  (temp memory ~0). The jvp materialises N x K intermediates (2.4 GB at K = 1,000;
+  XLA bytes accessed 4.8 GB vs 0.8 MB for the price). Its time is again set by memory
+  traffic, not arithmetic.
+- Reverse mode's time grows faster than its flops (1,269x time vs 69x flops at
+  K = 100). Each chunked pullback re-reads the stored N x K residuals.

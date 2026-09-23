@@ -1,0 +1,10 @@
+{
+  "processor": "Intel64 Family 6 Model 191 Stepping 2, GenuineIntel",
+  "cpu_name": "13th Gen Intel(R) Core(TM) i7-13700HX",
+  "os": "Windows-11-10.0.26200-SP0",
+  "cpu_count": 24,
+  "python": "3.12.10",
+  "jax": "0.11.2",
+  "backend": "cpu",
+  "device": "cpu:0"
+}

@@ -5,7 +5,8 @@ import numpy as np
 import mcgreeks  # noqa: F401
 from mcgreeks.black_scholes import bs_greeks
 from mcgreeks.greeks_ad import ad_greeks
-from mcgreeks.greeks_fd import fd_delta, fd_first, fd_gamma
+from mcgreeks.greeks_fd import (fd_delta, fd_first, fd_gamma, fd_greeks_loop,
+                                fd_greeks_vmap)
 from mcgreeks.models import normals
 
 N = 200_000
@@ -37,6 +38,17 @@ def test_crn_gamma_close_to_black_scholes_at_moderate_h():
     g = fd_gamma(*ARGS, 1.0, Z, Z, Z)
     exact = bs_greeks(100.0, 100.0, 0.05, 0.2, 1.0)["gamma"]
     assert abs(g - exact) / exact < 0.05
+
+
+def test_vectorised_bumping_equals_loop():
+    """Same 7 bumped pricings on the same Z; only the dispatch differs."""
+    Z = normals(jax.random.PRNGKey(14), N)
+    for h in (1e-2, 1e-4):
+        loop = fd_greeks_loop(*ARGS, h, Z)
+        vec = fd_greeks_vmap(*ARGS, h, Z)
+        for g in ("price", "delta", "vega", "rho"):
+            np.testing.assert_allclose(vec[g], loop[g], rtol=0, atol=1e-10,
+                                       err_msg=f"{g}, h={h}")
 
 
 def test_independent_seeds_small_h_is_useless():
