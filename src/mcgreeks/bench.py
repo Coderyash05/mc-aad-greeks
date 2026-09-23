@@ -113,6 +113,26 @@ def cost(jitted, *args, **kwargs):
             "bytes": ca.get("bytes accessed")}
 
 
+def cost_lowered(jitted, *args, **kwargs):
+    """Like cost(), but on the lowered HLO before XLA optimisation: each operation
+    counted once, as JAX emitted it. Needs no compilation (fast, no memory).
+
+    Why: for a long *unrolled* scan, XLA's fusion duplicates cheap elementwise work
+    across fusions, so the compiled count grows faster than the arithmetic the
+    rolled program actually performs (measured: Asian price 4.3 -> 9.6 flops per
+    path-step as M goes 12 -> 252 compiled, a constant 4.0 lowered). For loop-free
+    programs the two counts agree to ~1.5% (basket, d = 50). A rolled loop body is
+    still counted once, so unroll the scan (or multiply by the trip count) first.
+    """
+    ca = jitted.lower(*args, **kwargs).cost_analysis()
+    if isinstance(ca, (list, tuple)):
+        ca = ca[0] if ca else None
+    if not ca:
+        return {"flops": None, "transcendentals": None, "bytes": None}
+    return {"flops": ca.get("flops"), "transcendentals": ca.get("transcendentals"),
+            "bytes": ca.get("bytes accessed")}
+
+
 def temp_bytes(jitted, *args, **kwargs):
     """Compiled temporary-buffer size (bytes) from memory_analysis(), or None."""
     ma = jitted.lower(*args, **kwargs).compile().memory_analysis()

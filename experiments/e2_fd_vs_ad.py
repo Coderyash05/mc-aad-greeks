@@ -7,10 +7,14 @@ then measure RMSE against the closed form. Two finite-difference variants:
 Autodiff delta has no h, so it is a flat line. Autodiff gamma is exactly 0
 (the trap we fix next), so its error equals the true gamma: also a flat line.
 
+The headline (best-h FD delta vs autodiff delta) chooses h OUT OF SAMPLE, on
+separate calibration batches, and reports 95% paired-bootstrap CIs.
+
 Run:  python experiments/e2_fd_vs_ad.py
-Writes results/e2_fd_vs_ad.csv and results/e2_fd_vs_ad.png.
+Writes results/e2_fd_vs_ad.csv, results/e2_headline.csv and results/e2_fd_vs_ad.png.
 """
 import csv
+import zlib
 from pathlib import Path
 
 import jax
@@ -21,7 +25,9 @@ import numpy as np
 import mcgreeks  # noqa: F401
 from mcgreeks.black_scholes import bs_greeks
 from mcgreeks.pricer import discounted_payoffs, mc_price
+from mcgreeks.stats import paired_bootstrap, tune, verdict
 
+CAL_KEY = jax.random.PRNGKey(zlib.crc32(b"e2-e5-calibration"))
 S0, SIGMA, R, T, K = 100.0, 0.2, 0.05, 1.0, 100.0
 REPS, N = 500, 20_000
 H_GRID = np.logspace(-4, 1.6, 29)  # 1e-4 .. ~40 (price units, S0 = 100)
@@ -46,6 +52,54 @@ ad_gamma_fn = jax.jit(jax.vmap(jax.grad(jax.grad(mc_price, argnums=0), argnums=0
 
 def rmse(est, exact):
     return float(jnp.sqrt(jnp.mean((est - exact) ** 2)))
+
+
+def per_h(Z, Zu, Zm, Zd):
+    """Per-batch FD estimates for every h: arrays (len(H_GRID), REPS)."""
+    mid_c, mid_i = batch_price(S0, Z), batch_price(S0, Zm)
+    out = {"delta_crn": [], "delta_indep": [], "gamma_crn": [], "gamma_indep": []}
+    for h in H_GRID:
+        up_c, dn_c = batch_price(S0 + h, Z), batch_price(S0 - h, Z)
+        up_i, dn_i = batch_price(S0 + h, Zu), batch_price(S0 - h, Zd)
+        out["delta_crn"].append((up_c - dn_c) / (2 * h))
+        out["delta_indep"].append((up_i - dn_i) / (2 * h))
+        out["gamma_crn"].append((up_c - 2 * mid_c + dn_c) / h**2)
+        out["gamma_indep"].append((up_i - 2 * mid_i + dn_i) / h**2)
+    return {k: np.asarray(jnp.stack(v)) for k, v in out.items()}
+
+
+def headline(Z, Zu, Zm, Zd, ad_d, d_ex, g_ex):
+    """Best-h FD vs autodiff, with h chosen OUT OF SAMPLE on separate calibration
+    batches, and 95% paired-bootstrap CIs (mcgreeks.stats). Writes e2_headline.csv."""
+    cal = per_h(*(jax.random.normal(k, (REPS, N), dtype=jnp.float64)
+                  for k in jax.random.split(CAL_KEY, 4)))
+    ev = per_h(Z, Zu, Zm, Zd)
+    t = {k: tune(H_GRID, cal[k], ev[k], d_ex if k.startswith("delta") else g_ex) for k in ev}
+    errs = {f"FD CRN (h = {t['delta_crn']['value']:.3g})": t["delta_crn"]["errors"],
+            f"FD independent (h = {t['delta_indep']['value']:.3g})": t["delta_indep"]["errors"],
+            "Autodiff (pathwise)": np.asarray(ad_d) - d_ex}
+    boot = paired_bootstrap(errs, seed=2, reference="Autodiff (pathwise)")
+    rows = []
+    print(f"E2 headline, delta (h chosen on calibration batches; 95% paired-bootstrap CIs):")
+    for name, r in boot["methods"].items():
+        rows.append({"greek": "delta", "estimator": name, "rmse": r["rmse"], "ci_lo": r["ci"][0],
+                     "ci_hi": r["ci"][1], "ratio_vs_ad": r["ratio"], "ratio_ci_lo": r["ratio_ci"][0],
+                     "ratio_ci_hi": r["ratio_ci"][1], "verdict": verdict(boot, name)})
+        print(f"  {name:<30} RMSE {r['rmse']:.5f} [{r['ci'][0]:.5f}, {r['ci'][1]:.5f}]   "
+              f"x AD {r['ratio']:.3f} [{r['ratio_ci'][0]:.3f}, {r['ratio_ci'][1]:.3f}]   "
+              f"{verdict(boot, name)}")
+    for k, v in t.items():
+        rows.append({"greek": k, "estimator": "tuning", "rmse": v["rmse_out"],
+                     "h_out_of_sample": v["value"], "h_in_sample": v["value_in"],
+                     "rmse_in_sample": v["rmse_in"]})
+        print(f"  tuning {k:<12} h out-of-sample {v['value']:.3g} -> RMSE {v['rmse_out']:.5f};"
+              f"  in-sample {v['value_in']:.3g} -> RMSE {v['rmse_in']:.5f}")
+    print()
+    fields = list(dict.fromkeys(k for r in rows for k in r))
+    with (RESULTS / "e2_headline.csv").open("w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        w.writerows(rows)
 
 
 def main():
@@ -82,6 +136,8 @@ def main():
         w.writeheader()
         for r in rows:
             w.writerow({**r, "ad_delta": ad_delta_rmse, "ad_gamma": ad_gamma_rmse})
+
+    headline(Z, Zu, Zm, Zd, ad_d, d_ex, g_ex)
 
     # ---- summary -------------------------------------------------------------
     print(f"Setup: S0=K=100, sigma=0.2, r=0.05, T=1; {REPS} batches x {N:,} paths")

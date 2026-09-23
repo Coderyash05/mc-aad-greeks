@@ -1,0 +1,13 @@
+method,vs,ratio,ci_lo,ci_hi,verdict
+Likelihood ratio,"FD, CRN (h = 6.31)",3.2013506680633994,2.9213066460827304,3.480608692576111,"worse than FD, CRN (h = 6.31)"
+Pathwise-LR (mixed),"FD, CRN (h = 6.31)",0.8979645041917055,0.8274049555248746,0.971851765696904,"beats FD, CRN (h = 6.31)"
+"Autodiff, smoothed (eps = 1.6)","FD, CRN (h = 6.31)",1.1223554035739822,1.0987816227795657,1.1469165426900465,"worse than FD, CRN (h = 6.31)"
+"FD, CRN (h = 6.31)",Likelihood ratio,0.3123681544717912,0.2873060755225686,0.3423125785366622,beats Likelihood ratio
+Pathwise-LR (mixed),Likelihood ratio,0.2804955149555401,0.26427114085447956,0.29767733207959596,beats Likelihood ratio
+"Autodiff, smoothed (eps = 1.6)",Likelihood ratio,0.35058808607584724,0.322554379826859,0.38383108743610767,beats Likelihood ratio
+"FD, CRN (h = 6.31)",Pathwise-LR (mixed),1.1136297652434946,1.0289635070320358,1.2085980402114,worse than Pathwise-LR (mixed)
+Likelihood ratio,Pathwise-LR (mixed),3.565119392937548,3.3593421205936354,3.783992446412846,worse than Pathwise-LR (mixed)
+"Autodiff, smoothed (eps = 1.6)",Pathwise-LR (mixed),1.2498883846018614,1.1542541488637883,1.3527753032967311,worse than Pathwise-LR (mixed)
+"FD, CRN (h = 6.31)","Autodiff, smoothed (eps = 1.6)",0.8909833701656724,0.8719030224240661,0.9100989509523048,"beats Autodiff, smoothed (eps = 1.6)"
+Likelihood ratio,"Autodiff, smoothed (eps = 1.6)",2.8523502073132545,2.6053127187298073,3.1002529624609525,"worse than Autodiff, smoothed (eps = 1.6)"
+Pathwise-LR (mixed),"Autodiff, smoothed (eps = 1.6)",0.8000714402338729,0.7392210647949938,0.866360325507718,"beats Autodiff, smoothed (eps = 1.6)"

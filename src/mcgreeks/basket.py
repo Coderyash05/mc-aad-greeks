@@ -1,6 +1,8 @@
 """Basket call on d correlated GBM assets: where reverse-mode AD pays off.
 
 Payoff: max(sum_i w_i S_T^i - K, 0). No closed form, so Monte Carlo is needed.
+The geometric basket max(prod_i (S_T^i)^{w_i} - K, 0) does have one, and is used to
+check the Monte Carlo Greeks exactly (geometric_basket_price).
 Correlation is parametrised by the d(d-1)/2 off-diagonal entries `rho`, so the
 gradient w.r.t. rho[k] is the sensitivity to moving ONE correlation pair
 (both symmetric entries together), which is what a risk system reports.
@@ -12,6 +14,7 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
+from jax.scipy.stats import norm
 
 
 def corr_from_offdiag(rho, d):
@@ -26,26 +29,119 @@ def offdiag_from_corr(C):
     return C[jnp.triu_indices(d, k=1)]
 
 
-def basket_terminal(S0, sigma, rho, r, T, Z):
-    """S0, sigma: (d,); rho: (d(d-1)/2,); Z: (N, d) independent normals."""
-    d = S0.shape[0]
-    L = jnp.linalg.cholesky(corr_from_offdiag(rho, d))
+def basket_cholesky(rho, d):
+    """Lower Cholesky factor L of the correlation matrix, C = L L^T. Depends only on
+    the parameters, not on the paths: a chunked adjoint computes it once."""
+    return jnp.linalg.cholesky(corr_from_offdiag(rho, d))
+
+
+def basket_terminal_L(S0, sigma, L, r, T, Z):
+    """S_T from the Cholesky factor. S0, sigma: (d,); L: (d, d); Z: (N, d) normals."""
     X = Z @ L.T                                  # correlated normals, (N, d)
     return S0 * jnp.exp((r - 0.5 * sigma**2) * T + sigma * jnp.sqrt(T) * X)
 
 
-@jax.jit
-def basket_price(S0, sigma, rho, r, T, K, w, Z):
-    ST = basket_terminal(S0, sigma, rho, r, T, Z)
-    return jnp.exp(-r * T) * jnp.mean(jnp.maximum(ST @ w - K, 0.0))
+def basket_terminal(S0, sigma, rho, r, T, Z):
+    """S0, sigma: (d,); rho: (d(d-1)/2,); Z: (N, d) independent normals."""
+    return basket_terminal_L(S0, sigma, basket_cholesky(rho, S0.shape[0]), r, T, Z)
 
 
-@jax.jit
-def basket_greeks(S0, sigma, rho, r, T, K, w, Z):
+def basket_price_L(S0, sigma, L, r, T, K, w, Z, geometric=False):
+    """Arithmetic basket max(sum_i w_i S_T^i - K, 0), or, with geometric=True, the
+    geometric basket max(prod_i (S_T^i)^{w_i} - K, 0) (weights summing to 1), which
+    has a closed form (geometric_basket_price) and so serves as an exact test case."""
+    if geometric:
+        X = Z @ L.T
+        logG = (jnp.log(S0) + (r - 0.5 * sigma**2) * T + sigma * jnp.sqrt(T) * X) @ w
+        B = jnp.exp(logG)
+    else:
+        B = basket_terminal_L(S0, sigma, L, r, T, Z) @ w
+    return jnp.exp(-r * T) * jnp.mean(jnp.maximum(B - K, 0.0))
+
+
+@partial(jax.jit, static_argnames="geometric")
+def basket_price(S0, sigma, rho, r, T, K, w, Z, geometric=False):
+    return basket_price_L(S0, sigma, basket_cholesky(rho, S0.shape[0]), r, T, K, w, Z,
+                          geometric)
+
+
+@partial(jax.jit, static_argnames="geometric")
+def basket_greeks(S0, sigma, rho, r, T, K, w, Z, geometric=False):
     """Price + all deltas, vegas, correlation sensitivities in one reverse pass."""
     price, (delta, vega, corr_sens) = jax.value_and_grad(basket_price, argnums=(0, 1, 2))(
-        S0, sigma, rho, r, T, K, w, Z
+        S0, sigma, rho, r, T, K, w, Z, geometric
     )
+    return {"price": price, "delta": delta, "vega": vega, "corr": corr_sens}
+
+
+@partial(jax.jit, static_argnames=("n_batches", "geometric"))
+def basket_greeks_se(S0, sigma, rho, r, T, K, w, Z, n_batches=200, geometric=False):
+    """Price and Greeks with batch-means standard errors.
+
+    Per-path gradients would need an N x P array (P = 2d + d(d-1)/2: 1,325 at d = 50),
+    so Z (N, d) is split into n_batches equal batches and basket_greeks is run on each
+    (lax.map: one batch live at a time). The estimate is the mean of the batch
+    estimates, which equals the full-sample estimate, and SE = sd(batch estimates) /
+    sqrt(n_batches) (batch means; Glasserman 2004, ch. 1 and App. A). With 200
+    batches, z = error / SE is t-distributed with 199 degrees of freedom under the
+    null, close to N(0, 1).
+    """
+    Zb = Z.reshape(n_batches, -1, Z.shape[-1])
+    g = jax.lax.map(lambda z: basket_greeks(S0, sigma, rho, r, T, K, w, z, geometric), Zb)
+    return {k: (jnp.mean(v, axis=0), jnp.std(v, axis=0, ddof=1) / jnp.sqrt(n_batches))
+            for k, v in g.items()}
+
+
+def example_basket(d, seed):
+    """A reproducible, deliberately heterogeneous test basket (used by the tests and E9).
+
+    S0 spread over 80-120, sigma over 0.15-0.35, positive weights summing to 1, and a
+    correlation matrix from a 2-factor model, C = D (B B^T + I) D with B ~ N(0, 1)
+    (d x 2) and D rescaling the diagonal to 1: positive definite by construction,
+    with correlations of both signs. Every sensitivity is then different, so a test
+    cannot pass by symmetry. Returns (S0, sigma, rho, w) as float64 arrays.
+    """
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    B = rng.normal(size=(d, 2))
+    C = B @ B.T + np.eye(d)
+    D = 1.0 / np.sqrt(np.diag(C))
+    C = D[:, None] * C * D[None, :]
+    w = rng.uniform(0.5, 1.5, d)
+    return (jnp.linspace(80.0, 120.0, d) if d > 1 else jnp.array([100.0]),
+            jnp.linspace(0.15, 0.35, d) if d > 1 else jnp.array([0.2]),
+            offdiag_from_corr(jnp.asarray(C)), jnp.asarray(w / w.sum()))
+
+
+def geometric_basket_price(S0, sigma, rho, r, T, K, w):
+    """Closed-form geometric basket call, weights w summing to 1.
+
+    log G_T = sum_i w_i log S_T^i
+            = sum_i w_i [log S0_i + (r - sigma_i^2/2) T] + sqrt(T) sum_i w_i sigma_i X_i,
+    with X ~ N(0, C), C the correlation matrix. So log G_T is normal with
+      mean  mu  = sum_i w_i [log S0_i + (r - sigma_i^2/2) T]
+      var   s^2 = T (w * sigma)^T C (w * sigma)
+    and, as for any lognormal G (same formula as geometric_asian_price),
+      price = e^{-rT} [ e^{mu + s^2/2} N(d1) - K N(d2) ],  d1 = (mu - log K + s^2)/s, d2 = d1 - s.
+    Glasserman (2004), ch. 4 (geometric baskets as control variates). d = 1, or C = all
+    ones with equal sigma and S0, reduces to Black-Scholes. Differentiable in JAX, so
+    exact deltas, vegas and correlation sensitivities come from jax.grad.
+    """
+    C = corr_from_offdiag(rho, S0.shape[0])
+    a = w * sigma
+    mu = jnp.sum(w * (jnp.log(S0) + (r - 0.5 * sigma**2) * T))
+    s2 = T * a @ C @ a
+    s = jnp.sqrt(s2)
+    d1 = (mu - jnp.log(K) + s2) / s
+    d2 = d1 - s
+    return jnp.exp(-r * T) * (jnp.exp(mu + 0.5 * s2) * norm.cdf(d1) - K * norm.cdf(d2))
+
+
+@jax.jit
+def geometric_basket_greeks(S0, sigma, rho, r, T, K, w):
+    """Exact price, deltas, vegas and correlation sensitivities (grad of the closed form)."""
+    price, (delta, vega, corr_sens) = jax.value_and_grad(
+        geometric_basket_price, argnums=(0, 1, 2))(S0, sigma, rho, r, T, K, w)
     return {"price": price, "delta": delta, "vega": vega, "corr": corr_sens}
 
 

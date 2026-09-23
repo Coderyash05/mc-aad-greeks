@@ -1,0 +1,41 @@
+greek,K,T,best,ties,winner
+gamma,80.0,0.1,Smoothed AD,"FD, CRN","tie: Smoothed AD, FD, CRN"
+gamma,90.0,0.1,Pathwise-LR (parity),,Pathwise-LR (parity)
+gamma,100.0,0.1,Pathwise-LR (parity),,Pathwise-LR (parity)
+gamma,110.0,0.1,"FD, CRN",Pathwise-LR; Pathwise-LR (parity),"tie: FD, CRN, Pathwise-LR, Pathwise-LR (parity)"
+gamma,120.0,0.1,"FD, CRN",,"FD, CRN"
+gamma,80.0,0.25,Pathwise-LR (parity),"FD, CRN; Smoothed AD","tie: Pathwise-LR (parity), FD, CRN, Smoothed AD"
+gamma,90.0,0.25,Smoothed AD,,Smoothed AD
+gamma,100.0,0.25,Pathwise-LR (parity),,Pathwise-LR (parity)
+gamma,110.0,0.25,Pathwise-LR,"FD, CRN; Pathwise-LR (parity); Smoothed AD","tie: Pathwise-LR, FD, CRN, Pathwise-LR (parity), Smoothed AD"
+gamma,120.0,0.25,"FD, CRN",Pathwise-LR; Pathwise-LR (parity),"tie: FD, CRN, Pathwise-LR, Pathwise-LR (parity)"
+gamma,80.0,1.0,Pathwise-LR (parity),,Pathwise-LR (parity)
+gamma,90.0,1.0,Pathwise-LR (parity),"FD, CRN","tie: Pathwise-LR (parity), FD, CRN"
+gamma,100.0,1.0,Pathwise-LR (parity),,Pathwise-LR (parity)
+gamma,110.0,1.0,Pathwise-LR,Pathwise-LR (parity),"tie: Pathwise-LR, Pathwise-LR (parity)"
+gamma,120.0,1.0,Pathwise-LR,"FD, CRN; Pathwise-LR (parity); Smoothed AD","tie: Pathwise-LR, FD, CRN, Pathwise-LR (parity), Smoothed AD"
+gamma,80.0,2.0,Pathwise-LR (parity),Smoothed AD,"tie: Pathwise-LR (parity), Smoothed AD"
+gamma,90.0,2.0,Pathwise-LR (parity),,Pathwise-LR (parity)
+gamma,100.0,2.0,Pathwise-LR (parity),,Pathwise-LR (parity)
+gamma,110.0,2.0,Pathwise-LR (parity),,Pathwise-LR (parity)
+gamma,120.0,2.0,Pathwise-LR,Pathwise-LR (parity),"tie: Pathwise-LR, Pathwise-LR (parity)"
+digital delta,80.0,0.1,Smoothed AD,"FD, CRN","tie: Smoothed AD, FD, CRN"
+digital delta,90.0,0.1,LR (parity),,LR (parity)
+digital delta,100.0,0.1,LR (parity),LR,"tie: LR (parity), LR"
+digital delta,110.0,0.1,LR,"FD, CRN; LR (parity)","tie: LR, FD, CRN, LR (parity)"
+digital delta,120.0,0.1,"FD, CRN",,"FD, CRN"
+digital delta,80.0,0.25,LR (parity),"FD, CRN; Smoothed AD","tie: LR (parity), FD, CRN, Smoothed AD"
+digital delta,90.0,0.25,Smoothed AD,,Smoothed AD
+digital delta,100.0,0.25,LR,LR (parity),"tie: LR, LR (parity)"
+digital delta,110.0,0.25,Smoothed AD,LR; LR (parity),"tie: Smoothed AD, LR, LR (parity)"
+digital delta,120.0,0.25,LR (parity),"FD, CRN; LR","tie: LR (parity), FD, CRN, LR"
+digital delta,80.0,1.0,LR (parity),Smoothed AD,"tie: LR (parity), Smoothed AD"
+digital delta,90.0,1.0,"FD, CRN",,"FD, CRN"
+digital delta,100.0,1.0,LR (parity),LR,"tie: LR (parity), LR"
+digital delta,110.0,1.0,LR,LR (parity),"tie: LR, LR (parity)"
+digital delta,120.0,1.0,Smoothed AD,LR; LR (parity),"tie: Smoothed AD, LR, LR (parity)"
+digital delta,80.0,2.0,Smoothed AD,LR (parity),"tie: Smoothed AD, LR (parity)"
+digital delta,90.0,2.0,"FD, CRN",,"FD, CRN"
+digital delta,100.0,2.0,LR,LR (parity),"tie: LR, LR (parity)"
+digital delta,110.0,2.0,LR (parity),LR,"tie: LR (parity), LR"
+digital delta,120.0,2.0,LR (parity),LR,"tie: LR (parity), LR"

@@ -1,0 +1,13 @@
+warning: in the working copy of 'experiments/e8_sweep.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/mcgreeks/basket.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/mcgreeks/greeks_lr.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/test_greeks_lr.py', LF will be replaced by CRLF the next time Git touches it
+ README.md                 | 150 [32m++++++++++++++++[m[31m----[m
+ experiments/e8_sweep.py   | 163 [32m++++++++++++++++++[m[31m----[m
+ results/e8_sweep.csv      | 342 [32m+++++++++++++++++++++++++++[m[31m-------------------[m
+ results/e8_sweep.png      | Bin [31m220148[m -> [32m284728[m bytes
+ results/e8_winners.csv    |  64 [32m++++[m[31m-----[m
+ src/mcgreeks/basket.py    | 101 [32m++++++++++++[m[31m--[m
+ src/mcgreeks/greeks_lr.py |  45 [32m++++++[m
+ tests/test_greeks_lr.py   |  53 [32m++++++[m[31m-[m
+ 8 files changed, 673 insertions(+), 245 deletions(-)

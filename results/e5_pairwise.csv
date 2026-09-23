@@ -1,0 +1,7 @@
+method,vs,ratio,ci_lo,ci_hi,verdict
+"Autodiff, sigmoid (eps = 1.6)","FD, CRN (h = 4)",1.027698602022936,0.9886148495424504,1.0675944665922652,"not distinguishable from FD, CRN (h = 4)"
+Likelihood ratio,"FD, CRN (h = 4)",0.6054200918014823,0.5579759764232699,0.6566722047390879,"beats FD, CRN (h = 4)"
+"FD, CRN (h = 4)","Autodiff, sigmoid (eps = 1.6)",0.9730479325665972,0.9366852596088331,1.0115162649040765,"not distinguishable from Autodiff, sigmoid (eps = 1.6)"
+Likelihood ratio,"Autodiff, sigmoid (eps = 1.6)",0.5891027686617117,0.5445177858962422,0.6353246630024729,"beats Autodiff, sigmoid (eps = 1.6)"
+"FD, CRN (h = 4)",Likelihood ratio,1.6517456449527625,1.5228298017304989,1.7921918567550814,worse than Likelihood ratio
+"Autodiff, sigmoid (eps = 1.6)",Likelihood ratio,1.697496690215427,1.5739983953541572,1.8364873116218146,worse than Likelihood ratio
