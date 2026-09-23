@@ -33,8 +33,10 @@ REPS, N = 500, 20_000
 H_GRID = np.logspace(-4, 1.6, 29)  # 1e-4 .. ~40 (price units, S0 = 100)
 RESULTS = Path(__file__).resolve().parents[1] / "results"
 
-# Colors: fixed categorical order, validated palette (slot 1 blue, 2 orange, 3 aqua).
-C_INDEP, C_CRN, C_AD = "#2a78d6", "#eb6834", "#1baf7a"
+# Project-wide method colours: CRN finite differences amber (as in E3, E5, E6), autodiff
+# aqua, independent-seed finite differences red (palette slot 8; used only here).
+# Validated together: normal-vision min dE 20.8, CVD 6.9 (lines also differ by style).
+C_INDEP, C_CRN, C_AD = "#e34948", "#eda100", "#1baf7a"
 INK, MUTED, GRID, AXIS = "#0b0b0b", "#898781", "#e1e0d9", "#c3c2b7"
 
 
