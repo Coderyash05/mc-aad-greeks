@@ -1,10 +1,10 @@
 # Experiments: full results
 
-Every experiment in detail: set-up, tables with confidence intervals, figures, caveats
-and before/after comparisons. The [README](../README.md) summarises them; the maths is
-in [DERIVATIONS.md](DERIVATIONS.md) and the test policy in [TESTING.md](TESTING.md).
-Commands are run from the repository root. "Phase n" in before/after notes refers to the
-project's development history (`git log`).
+Every experiment in detail: set-up, tables with confidence intervals, figures and
+caveats. The [README](../README.md) summarises them; the maths is in
+[DERIVATIONS.md](DERIVATIONS.md) and the test policy in [TESTING.md](TESTING.md). How
+results moved between versions of the code is recorded in
+[CHANGELOG.md](../CHANGELOG.md). Commands are run from the repository root.
 
 Contents: [Timing protocol](#timing-protocol) · [Forward vs reverse mode](#forward-vs-reverse-mode-which-one-should-win) · [E1](#e1-pricer-validation-and-the-cost-of-3-greeks) · [Statistical protocol](#statistical-protocol-for-e2-e5-and-e8) · [E2](#e2-finite-differences-vs-autodiff-delta) · [E3 + E4](#e3--e4-gamma) · [E5](#e5-digital-call-delta) · [E8](#e8-robustness-across-strikes-and-maturities) · [E6](#e6-basket-call-forward-vs-reverse-vs-bumping) · [E9](#e9-are-the-basket-greeks-right-geometric-basket-closed-form) · [E6b](#e6b-the-forward-mode-regime-many-outputs-one-input) · [E7](#memory-and-end-to-end-cost-e7)
 
@@ -51,7 +51,7 @@ Price + delta, vega, rho of one call, N = 1,000,000 (`results/e1_timing.csv`):
 - The flop ratios are exact and machine-independent. The time ratios are not stable:
   the denominator is a 0.5 ms pricing that moves by 20-25% between runs. A second run
   on the same machine gave price 0.63 ms and reverse 6.7x, forward 8.6x, loop 7.3x,
-  vmap 8.4x. Before this change (mean of 50 runs, two methods): reverse 7.9x, bumping 7.4x.
+  vmap 8.4x.
 - With only 3 inputs, reverse AD and bumping are within noise in wall-clock. The
   wall-clock ratios sit above the flop ratios because a European pricing is only ~7
   flops per path. It is limited by memory traffic, not arithmetic (see the roofline below).
@@ -106,19 +106,25 @@ methods. That gives a 95% percentile CI for each RMSE and for each RMSE ratio.
 
 | Estimator | Bias | RMSE [95% CI] | RMSE / best [95% CI] | Verdict |
 |---|---|---|---|---|
-| Pathwise-LR (mixed) | 1.4e-05 | 0.00026 [0.00025, 0.00028] | 1 | best |
-| FD, CRN (h = 6.31) | -9.8e-05 | 0.00029 [0.00028, 0.00031] | 1.11 [1.03, 1.21] | worse than pathwise-LR |
-| Autodiff, smoothed (eps = 1.58) | -1.9e-04 | 0.00033 [0.00031, 0.00035] | 1.25 [1.15, 1.35] | worse than pathwise-LR |
-| Likelihood ratio | 2.1e-05 | 0.00094 [0.00088, 0.00100] | 3.57 [3.36, 3.78] | worse than pathwise-LR |
+| Pathwise-LR (parity) | -9.3e-06 | 0.00017 [0.00016, 0.00018] | 1 | best |
+| Pathwise-LR (mixed) | 1.4e-05 | 0.00026 [0.00025, 0.00028] | 1.58 [1.45, 1.71] | worse than pathwise-LR (parity) |
+| FD, CRN (h = 6.31) | -9.8e-05 | 0.00029 [0.00028, 0.00031] | 1.76 [1.61, 1.92] | worse than pathwise-LR (parity) |
+| Autodiff, smoothed (eps = 1.58) | -1.9e-04 | 0.00033 [0.00031, 0.00035] | 1.97 [1.81, 2.15] | worse than pathwise-LR (parity) |
+| LR (parity) | -3.0e-05 | 0.00059 [0.00055, 0.00062] | 3.50 [3.26, 3.76] | worse than pathwise-LR (parity) |
+| Likelihood ratio | 2.1e-05 | 0.00094 [0.00088, 0.00100] | 5.63 [5.15, 6.16] | worse than pathwise-LR (parity) |
 | Autodiff, naive | -0.01876 | 0.01876 | not ranked | identically 0 |
 
-- At the money, **pathwise-LR beats CRN FD**, narrowly (1.11x [1.03, 1.21]). Both
-  beat smoothed autodiff and LR.
+- **Pathwise-LR (parity) is best at the money.** K = 100 is below the forward
+  S0 e^{rT} = 105.1, so it uses the put leg. It is 0.63x [0.58, 0.69] the RMSE of plain
+  pathwise-LR and 0.57x [0.52, 0.62] that of CRN FD, on the same batches.
+- **Among the plain estimators, pathwise-LR beats CRN FD**, narrowly (1.11x
+  [1.03, 1.21]). Both beat smoothed autodiff and LR.
 - **Smoothed autodiff is worse than CRN FD** (1.12x [1.10, 1.15]), not tied with it.
-  Smoothing makes autodiff's gamma usable, but here it is the third-best fix.
-- Before/after: every RMSE is unchanged from the previous version. The only change is
-  that h is now chosen on calibration batches rather than taken from E2 on the same
-  batches, and it came out the same (6.31).
+  Smoothing makes autodiff's gamma usable, but it is not the best fix here.
+- **LR (parity)** is 0.62x [0.57, 0.68] the RMSE of LR, but still 2.2x pathwise-LR:
+  parity removes the payoff's linear part, not the variance of the LR weight.
+- The figure compares the smoothing sweep with the plain estimators. The parity
+  estimators are in the table and in `e3_gamma.csv` / `e3_pairwise.csv`.
 - E4 (smoothing-width sweep, left panel): bias falls and variance grows as eps shrinks;
   RMSE is minimised at eps ≈ 1.6.
 
@@ -138,8 +144,7 @@ methods. That gives a 95% percentile CI for each RMSE and for each RMSE ratio.
 
 - At the money, **LR beats both FD and smoothed autodiff** (ratios 0.61x and 0.59x).
 - **Smoothed autodiff and CRN FD are not distinguishable** (1.03x [0.99, 1.07]).
-- All RMSEs are unchanged from the previous version. The tuned h and eps are the same
-  out of sample.
+- The h and eps chosen out of sample equal the in-sample choices.
 
 ## E8: robustness across strikes and maturities
 
@@ -175,12 +180,6 @@ Share of the 20 cells in which each method is best or tied with the best:
 | Digital delta | Smoothed autodiff | 7/20 / 5/8 / 2/12 | 1.18 / 2.0 |
 | Digital delta | FD, CRN | 7/20 / 4/8 / 3/12 | 1.29 / 2.0 |
 
-Before/after: adding the parity methods left every existing RMSE and CI unchanged (same
-batches, same bootstrap resamples; max relative change 0). Ratios to the best, and so
-the counts above, moved where a parity method became the new best. Before, the counts
-were: pathwise-LR 10/20, FD 12/20, smoothed autodiff 9/20 (worst 1.5x) for gamma; LR
-11/20, smoothed autodiff 8/20 (worst 2.0x), FD 6/20 for digital delta.
-
 - **Without parity, the at-the-money winners of E3 and E5 do not generalise.** Plain
   pathwise-LR (gamma) and LR (digital delta) are never best in the money, where they
   are up to 28x and 23x worse than the best method (K = 80, T = 0.1).
@@ -197,12 +196,11 @@ were: pathwise-LR 10/20, FD 12/20, smoothed autodiff 9/20 (worst 1.5x) for gamma
     parity removes the linear part of the payoff, not the variance of the LR weight.
   - It also helps at K = 100: the strike is below the forward (105.1 at T = 1), so the
     put leg is used. Pathwise-LR (parity) / pathwise-LR = 0.57 [0.50, 0.64] at K = 100,
-    T = 1, the E3 set-up. E3 itself was not rerun with the parity estimator.
-- **Robustness now depends on the Greek.** For digital delta, LR (parity) is both the
-  most often best (15/20) and has the smallest worst case (1.7x). For gamma,
-  pathwise-LR (parity) is best or tied in 17/20 cells, but smoothed autodiff still has
-  the smallest worst case (2.4x vs 2.9x). Smoothed autodiff's worst case rose from 1.5x
-  to 2.4x only because the best method in those cells got better.
+    T = 1 on these batches, and 0.63 [0.58, 0.69] on E3's 500 batches.
+- **The most robust method depends on the Greek.** For digital delta, LR (parity) is
+  both the most often best (15/20) and has the smallest worst case (1.7x). For gamma,
+  pathwise-LR (parity) is best or tied in 17/20 cells, but smoothed autodiff has the
+  smallest worst case (2.4x vs 2.9x).
 - **K = 90, T = 0.25 is the one cell where everything but smoothed autodiff does
   badly** (FD 3.55x, pathwise-LR parity 2.93x). A wide smoothing width (eps = 6.3)
   happens to have almost no bias there. FD is at the minimum of its own RMSE curve, so
@@ -221,12 +219,11 @@ were: pathwise-LR 10/20, FD 12/20, smoothed autodiff 9/20 (worst 1.5x) for gamma
     is tiny, and LR's RMSE is 69x the gamma itself (pathwise-LR's is 12.5x).
 - **Selection bias from tuning:** out-of-sample and in-sample widths differ in 9 of 80
   tuned cases, costing 0-4% RMSE.
-- **Grid edge:** two FD widths landed at the top of the 17-point grid (h = 15.8; gamma
-  K = 100, T = 2 and digital delta K = 90, T = 2). With the grid extended to 25.1, 39.8
-  and 63.1, calibration still chooses 15.8 in both. The optimum is interior, so nothing
-  changes (RMSE 1.542e-4 and 1.028e-4 before and after). FD is still best for digital
-  delta at K = 90, T = 2. For gamma at K = 100, T = 2 it is now 1.38x pathwise-LR
-  (parity), because of parity, not because of the grid.
+- **Grid edge:** two FD widths land at the top of the 17-point grid (h = 15.8; gamma
+  K = 100, T = 2 and digital delta K = 90, T = 2). The script then extends the grid to
+  25.1, 39.8 and 63.1, and calibration still chooses 15.8 in both cells. The optimum is
+  interior (RMSE 1.542e-4 and 1.028e-4 on either grid). In those cells FD is best for
+  digital delta, and 1.38x pathwise-LR (parity) for gamma.
 
 ## E6: basket call, forward vs reverse vs bumping
 
@@ -253,7 +250,7 @@ Cost in units of one pricing, median wall-clock [IQR] and XLA flops:
   time and 2.05-2.9x in flops for any P. Forward AD costs ~1.05-1.7 pricings of
   arithmetic per input, about half of bumping's 2 per input.
 - At d = 50: reverse AD 27 ms; forward AD 8.8 s (325x slower); loop bumping 17.3 s
-  (637x; 633x before Phase 1); vmapped bumping 30.0 s (1,106x).
+  (637x); vmapped bumping 30.0 s (1,106x).
 - All four give the same gradient: forward vs reverse to <= 4.5e-14, vmapped vs loop
   bumping to <= 8.9e-12 (tested in `tests/test_basket.py`). Bumping vs AD differs by
   <= 2.2e-4, the O(h^2) and kink-path error of central differences.
@@ -270,8 +267,8 @@ Cost in units of one pricing, median wall-clock [IQR] and XLA flops:
   (4.2x at d = 50) because reverse mode stores the forward sweep's intermediates and
   reads them back. XLA's bytes-accessed count is 3.80x one pricing at every d, and the
   wall-clock ratio tracks it for d >= 10 (3.4-4.2x). At d <= 5 the N x d arrays
-  (<= 4 MB) fit in cache and the ratio is lower (2.8-2.9x). Reducing that stored
-  state is Phase 2.
+  (<= 4 MB) fit in cache and the ratio is lower (2.8-2.9x). E7 measures how much of
+  that stored state chunking and checkpointing remove.
 - What the benchmark does not claim: the bumps reprice from scratch (generic black-box
   bumping). A hand-written bump could reuse `Z @ L.T` for the delta and vega bumps;
   that is a smarter algorithm, not a fairer benchmark of the same one.
@@ -341,13 +338,14 @@ over the family (see docs/TESTING.md); closed form = Black-Scholes at d = 1 and 
 geometric; the singular correlation matrix gets its Cholesky factor directly, a column
 of ones).
 
-| d | Sensitivities P | max \|z\|: price / deltas / vegas / correlations | max \|z\| overall |
+| d | Comparisons: sensitivities (+ price) | max \|z\|: price / deltas / vegas / correlations | max \|z\| overall |
 |---|---|---|---|
-| 2 | 6 | 0.52 / 0.52 / 0.68 / 0.39 | 0.68 |
-| 10 | 66 | 0.58 / 0.60 / 1.77 / 2.61 | 2.61 |
-| 50 | 1,326 | 0.69 / 0.53 / 1.85 / 2.57 | 2.57 |
+| 2 | 5 (+ price) | 0.52 / 0.52 / 0.68 / 0.39 | 0.68 |
+| 10 | 65 (+ price) | 0.58 / 0.60 / 1.77 / 2.61 | 2.61 |
+| 50 | 1,325 (+ price) | 0.69 / 0.53 / 1.85 / 2.57 | 2.57 |
 
 **Calibration over 200 independent seeds.** A max |z| of 2.57 over 1,326 comparisons
+(1,325 sensitivities + price)
 looks too good to be true: independent z's would exceed it almost surely. They are not
 independent. The pathwise derivative is e^{-rT} 1{G > K} G d(log G)/d(theta), and
 d(log G)/d(S0_i) = w_i / S0_i does not depend on the path, so all d deltas have the
@@ -360,7 +358,7 @@ noise. Repeating the whole experiment on 200 seeds gives independent z's:
 | 10 | 1.01 [0.94, 1.08] | 4.4% [3.6, 5.3] | +0.02 [-0.04, +0.07] | 0.0% [0.0, 1.8] / 0.6% |
 | 50 | 1.03 [1.00, 1.06] | 5.0% [4.6, 5.4] | -0.00 [-0.02, +0.02] | 2.5% [0.8, 5.7] / 11.2% |
 
-Against the closed-form geometric basket, all 1,326 sensitivities at d = 50 have
+Against the closed-form geometric basket, all 1,325 sensitivities (+ price) at d = 50 have
 z-scores consistent with t₁₉₉ across 200 independent seeds (mean z² = 1.03 [1.00, 1.06],
 mean z = -0.00 [-0.02, +0.02]), confirming no detectable bias and correctly calibrated
 standard errors.
@@ -438,20 +436,20 @@ one-shot pricing, to isolate the adjoint. End-to-end costs including the RNG fol
 
 Basket call, d = 50:
 
-| N | Flops x (excl. RNG): one-shot / chunked, hoisted / B = 1,000, Cholesky per batch | Total MB: one-shot / chunked B = 10,000 / B = 1,000 | Before (Z precomputed): chunked 10k / 1k MB |
-|---|---|---|---|
-| 10,000 | 1.92 / 2.05 / 3.26 | 20.3 / 16.2 / 2.1 | 16.4 / 5.7 |
-| 100,000 | 2.03 / 2.05 / 3.56 | 202 / 20.3 / 2.1 | 56 / 42 |
-| 1,000,000 | 2.05 / 2.05 / 3.60 | 2,024 / 20.3 / 2.1 | 416 / 402 |
+| N | Flops x (excl. RNG): one-shot / chunked, hoisted / B = 1,000, Cholesky per batch | Total MB: one-shot / chunked B = 10,000 / B = 1,000 |
+|---|---|---|
+| 10,000 | 1.92 / 2.05 / 3.26 | 20.3 / 16.2 / 2.1 |
+| 100,000 | 2.03 / 2.05 / 3.56 | 202 / 20.3 / 2.1 |
+| 1,000,000 | 2.05 / 2.05 / 3.60 | 2,024 / 20.3 / 2.1 |
 
 Arithmetic Asian call, N = 100,000, B = 10,000; sqrt(M) time blocks of 3, 4, 14, 25 steps:
 
-| M | Flops x (excl. RNG): one-shot / chunked / + sqrt(M) checkpoint | Total MB: one-shot / chunked / + sqrt(M) checkpoint | Before (Z precomputed, per-step checkpoint) MB |
-|---|---|---|---|
-| 12 | 2.29 / 2.27 / 3.00 | 23.2 / 3.7 / 1.5 | 12.3 / 12.3 |
-| 52 | 2.26 / 2.25 / 3.00 | 87.2 / 10.6 / 2.6 | 50.7 / 50.7 |
-| 252 | 2.25 / 2.25 / 3.00 | 407 / 47.4 / 6.2 | 243 / 243 |
-| 1,000 | 2.25 / 2.25 / 3.00 | 1,604 / 172 / 11.4 | 960 / 960 |
+| M | Flops x (excl. RNG): one-shot / chunked / + sqrt(M) checkpoint | Total MB: one-shot / chunked / + sqrt(M) checkpoint |
+|---|---|---|
+| 12 | 2.29 / 2.27 / 3.00 | 23.2 / 3.7 / 1.5 |
+| 52 | 2.26 / 2.25 / 3.00 | 87.2 / 10.6 / 2.6 |
+| 252 | 2.25 / 2.25 / 3.00 | 407 / 47.4 / 6.2 |
+| 1,000 | 2.25 / 2.25 / 3.00 | 1,604 / 172 / 11.4 |
 
 - **Chunking caps memory in N, as the adjoint literature describes.**
   - One-shot memory grows with what it stores: N for the basket (about 2 KB per path at
@@ -466,14 +464,10 @@ Arithmetic Asian call, N = 100,000, B = 10,000; sqrt(M) time blocks of 3, 4, 14,
     0.44, 0.36, 0.39, 0.36 for M = 12 to 1,000).
   - Cost: about 2x the flops (2.03x the chunked pricing, 1.96x the chunked gradient),
     because the forward sweep and every normal are computed twice.
-  - Checkpointing each *single* step (the earlier version) saved nothing: a GBM step's
-    residual is one array, the same size as the carry it stores instead.
-
-**Before and after.** New random numbers give new estimates. One-shot prices on the old
-precomputed Z vs the `fold_in` stream differ by z = +0.84, +0.46, -2.49 (basket) and
-+0.79, -1.15, +1.14, -0.79 (Asian), where z is the difference over its combined SE
-(`results/e7_streams.csv`). One of seven beyond 2 is about a 9% event. The old tables
-are in `results/e7_memory_before_precomputedZ.csv`.
+  - Checkpointing each *single* step saves nothing (measured with the normals
+    precomputed: 960 MB at M = 1,000 with or without it): a GBM step's residual is one
+    array, the same
+    size as the carry it stores instead.
 
 ### End-to-end cost: random numbers + pricing + gradient
 
@@ -542,9 +536,8 @@ Caveats:
   draws only m x B normals (3 x 10,000 at M = 12), too little work to spread over the
   cores. Chunked RNG alone takes 49 ms vs 6.6 ms one-shot at M = 12, and 1.7 s vs 0.63 s
   at M = 1,000.
-- **Before Phase 2,** the wall-clock gap between reverse mode's time (4-6x) and flops
-  (2x) was attributed to memory footprint. Chunking to a 2-20 MB footprint with the
-  normals precomputed did not remove it: flops stayed 2.03-2.25x while time stayed
-  3.8-10.5x. That was measured with an earlier version of `e7_wallclock.py`, since
-  replaced by the end-to-end version, and its CSV was not kept. So that hypothesis is
-  rejected; the end-to-end view above is the fair comparison.
+- **Memory footprint does not explain reverse mode's wall-clock gap** (time 4-6x vs
+  flops 2x). Chunking to a 2-20 MB footprint with the normals precomputed did not
+  remove it: flops stayed 2.03-2.25x while time stayed 3.8-10.5x. That hypothesis is
+  rejected. The measurement came from a pricing-only timing script whose CSV was not
+  kept (see CHANGELOG.md); the end-to-end view above is the fair comparison.

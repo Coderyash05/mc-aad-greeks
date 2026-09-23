@@ -3,19 +3,23 @@
 This project computes Monte Carlo option Greeks in JAX by algorithmic differentiation
 (AD). It compares them with finite differences, likelihood-ratio and mixed estimators
 and payoff smoothing, using paired-bootstrap confidence intervals. Reverse-mode AD
-delivers all 1,325 sensitivities of a 50-asset basket for 4.2x the time of one pricing
-(2.05x in flops), against about 2,700x for bump-and-reprice. Every one of them matches
-a closed form within its standard error. AD is not uniformly best, though: tuned
+delivers all 1,325 sensitivities (+ price) of a 50-asset arithmetic basket for 4.2x the
+time of one pricing (2.05x in flops), against about 2,700x for bump-and-reprice.
+Those Greeks are validated through the geometric basket: it has a closed form and
+shares all the simulation and Cholesky code, and its 1,325 sensitivities (+ price) are
+unbiased with calibrated standard errors (E9). AD is not uniformly best, though: tuned
 common-random-number bumping is 2% more accurate for delta, autodiff gamma and
 digital delta are identically zero without a fix, and which fix wins depends on
 moneyness.
 
 ![Cost of all basket sensitivities: reverse-mode AD stays flat while forward mode and bumping grow linearly](results/e6_basket.png)
 
-*E6. Cost of all P = d + d + d(d-1)/2 sensitivities of a d-asset basket call, in units of
-one pricing (100,000 paths, CPU). Reverse mode stays flat at 2.8-4.2x in time and 2-3x
-in flops; forward mode and bumping grow linearly in P. Left: wall-clock time. Right: XLA
-flop count.*
+*E6. Cost of all P = d + d + d(d-1)/2 sensitivities (+ price) of a d-asset basket call,
+in units of one pricing (100,000 paths, CPU). Reverse mode stays flat at 2.8-4.2x in
+time and 2-3x in flops; forward mode and bumping grow linearly in P. Left: wall-clock
+time. Right: XLA flop count. "One pricing" excludes random-number generation: the
+normals are an input. End to end, with the normals generated inside the pipeline, AD
+costs ~1.5x one pricing (E7).*
 
 ## Quickstart
 
@@ -38,38 +42,52 @@ from mcgreeks.models import normals
 
 Z = normals(jax.random.PRNGKey(0), 1_000_000)
 S0, sigma, r, T, K = 100.0, 0.2, 0.05, 1.0, 100.0
+bs = bs_greeks(S0, K, r, sigma, T)
 
-est = ad_greeks_se(S0, sigma, r, T, K, Z)         # pathwise delta, vega, rho (+ SE), one reverse pass
+est = ad_greeks_se(S0, sigma, r, T, K, Z)         # pathwise delta, vega, rho with SEs, one reverse pass
+for g in ("delta", "vega", "rho"):
+    m, se = est[g]
+    print(f"{g:<6} {float(m):9.4f} ± {float(se):.4f} (1 SE)   Black-Scholes {float(bs[g]):.4f}")
+
 m, se = mean_se(pwlr_gamma_parity_samples(S0, sigma, r, T, K, Z))   # autodiff gamma would be 0
+print(f"gamma  {float(m):9.5f} ± {float(se):.5f} (1 SE)  Black-Scholes {float(bs['gamma']):.5f}")
 
 d = 20                                            # 20 deltas + 20 vegas + 190 correlation sensitivities
 Zb = jax.random.normal(jax.random.PRNGKey(1), (100_000, d), dtype=jnp.float64)
 g = basket_greeks(jnp.full(d, 100.0), jnp.linspace(0.15, 0.35, d),
                   jnp.full(d * (d - 1) // 2, 0.5), r, T, K, jnp.full(d, 1.0 / d), Zb)
+n = g["delta"].size + g["vega"].size + g["corr"].size
+print(f"basket price {float(g['price']):.4f} and {n} sensitivities from one reverse pass")
 ```
 
-Output: delta 0.6369 ± 0.0006 (Black-Scholes 0.6368), vega 37.52 ± 0.08 (37.52), rho
-53.24 ± 0.05 (53.23), gamma 0.01877 ± 0.00002 (0.01876), and 230 basket sensitivities
-from one reverse pass.
+Output (± is 1 standard error here; the Results table below uses 95% CIs):
+
+```text
+delta     0.6369 ± 0.0006 (1 SE)   Black-Scholes 0.6368
+vega     37.5204 ± 0.0756 (1 SE)   Black-Scholes 37.5240
+rho      53.2364 ± 0.0472 (1 SE)   Black-Scholes 53.2325
+gamma    0.01877 ± 0.00002 (1 SE)  Black-Scholes 0.01876
+basket price 9.7829 and 230 sensitivities from one reverse pass
+```
 
 ## Results
 
-"±" and brackets are 95% confidence intervals unless marked IQR. Ratios compare methods
+Brackets are 95% confidence intervals unless marked IQR. Ratios compare methods
 on the same random numbers (paired bootstrap). "A beats B" is claimed only when the
 ratio's CI excludes 1. Full tables, figures and caveats are in
 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md).
 
 | Question | Result | Where |
 |---|---|---|
-| Cost of all 1,325 sensitivities, 50-asset basket | Reverse AD **4.2x** one pricing [IQR 4.0, 4.3], 2.05x in flops. Forward AD 1,359x; bumping 2,666x (loop) and 4,629x (vectorised) | E6 |
+| Cost of all 1,325 sensitivities (+ price), 50-asset basket | Reverse AD **4.2x** one pricing [IQR 4.0, 4.3], 2.05x in flops. Forward AD 1,359x; bumping 2,666x (loop) and 4,629x (vectorised) | E6 |
 | When does forward mode win? | 1,000 outputs, 1 input: forward **43x** [IQR 43, 44] vs reverse 17,261x | E6b |
 | Delta accuracy: AD vs tuned CRN bumping (ATM) | RMSE ratio FD / AD = **0.978 [0.962, 0.994]**: bumping 2% better. Negative result for AD; it needs a tuned h | E2 |
-| Gamma, ATM: which estimator? | Pathwise-LR best. CRN FD 1.11x [1.03, 1.21], smoothed AD 1.25x [1.15, 1.35], LR 3.57x [3.36, 3.78]. Naive AD returns exactly 0 | E3 |
+| Gamma, ATM: which estimator? | Pathwise-LR (parity) best, RMSE 0.00017 [0.00016, 0.00018]. Plain pathwise-LR 1.58x [1.45, 1.71], CRN FD 1.76x [1.61, 1.92], smoothed AD 1.97x [1.81, 2.15], LR (parity) 3.50x [3.26, 3.76], LR 5.63x [5.15, 6.16]. Naive AD returns exactly 0 | E3 |
 | Digital delta, ATM | LR best. CRN FD 1.65x [1.52, 1.79], smoothed AD 1.70x [1.57, 1.84]; those two not distinguishable (1.03x [0.99, 1.07]) | E5 |
 | Do the ATM winners generalise (20 strikes x maturities)? | No. In the money plain pathwise-LR is up to **28x** and LR **23x** worse than the best method | E8 |
 | Fix for the in-the-money failure | Parity switch (put leg when K < forward). Pathwise-LR (parity) / plain = **0.045 [0.038, 0.053]** at K = 80, T = 0.1; best or tied in 17/20 gamma cells, worst 2.9x. LR (parity) for digital delta: 15/20, worst 1.7x | E8 |
 | Most robust gamma estimator | Smoothed AD: never worse than 2.4x the best in any cell, but best or tied in only 6/20 | E8 |
-| Are all 1,326 basket Greeks right? (d = 50, geometric closed form) | Over 200 seeds, mean z² = **1.03 [1.00, 1.06]** (t₁₉₉: 1.01), mean z = -0.00 [-0.02, +0.02]. No detectable bias; calibrated SEs | E9 |
+| Are the basket Greeks right? 1,325 sensitivities (+ price), d = 50, geometric closed form | Over 200 seeds, mean z² = **1.03 [1.00, 1.06]** (t₁₉₉: 1.01), mean z = -0.00 [-0.02, +0.02]. No detectable bias; calibrated SEs | E9 |
 | Adjoint memory for 1e6 paths (d = 50) | 2,024 MB one-shot to **20 MB** chunked (B = 1e4), at 1.03x the time and identical flops | E7 |
 | Adjoint memory for 1,000 time steps (Asian) | 172 MB to **11 MB** with √M checkpointing, for 2x the flops | E7 |
 | End-to-end AD overhead including random numbers | ~1.5x one pricing (basket 1.47x). RNG is 58-98% of pricing flops and is never differentiated | E7 |
@@ -106,8 +124,9 @@ ratio's CI excludes 1. Full tables, figures and caveats are in
   both.
 - **What is new here** is not a method but the measurement. Every comparison uses
   paired batches with bootstrap CIs and out-of-sample tuning. There is a 20-cell
-  robustness sweep, a closed-form check of all 1,325 correlation-inclusive basket
-  sensitivities, and an explicit family-wise false-alarm budget for the test suite
+  robustness sweep, a closed-form check of all 1,325 correlation-inclusive geometric
+  basket sensitivities (+ price), and an explicit family-wise false-alarm budget for the
+  test suite
   ([docs/TESTING.md](docs/TESTING.md)).
 
 ## Limitations
@@ -132,8 +151,9 @@ ratio's CI excludes 1. Full tables, figures and caveats are in
   hand-optimised bump that reuses shared work would be faster.
 - **Rare events:** deep out-of-the-money cases (fewer than 100 paying paths) get no
   importance sampling. The tests check structural facts there instead of an SE.
-- **Not rerun:** E3 (ATM gamma) predates the parity estimator. E8 shows pathwise-LR
-  (parity) would be 0.57x [0.50, 0.64] of plain pathwise-LR at that set-up.
+- **One volatility and rate in the sweep:** E8 varies strike and maturity only, at
+  σ = 0.2 and r = 0.05. Which estimator wins may shift at other volatilities, and the
+  parity switch point S0 e^{rT} moves with r.
 - **Unexplained artefacts:** AD-overhead ratios below 1 in two chunked configurations
   come from how XLA compiles the price-only program. They are reported, not
   investigated.
@@ -176,6 +196,7 @@ ratio's CI excludes 1. Full tables, figures and caveats are in
 | `docs/EXPERIMENTS.md` | every experiment in full |
 | `docs/DERIVATIONS.md` | the maths behind each estimator, plus 10 interview questions |
 | `docs/TESTING.md` | how statistical tests are built and their false-alarm budget |
+| `CHANGELOG.md` | how results moved between versions of the code (before/after comparisons) |
 
 ## References
 
@@ -186,6 +207,7 @@ ratio's CI excludes 1. Full tables, figures and caveats are in
 - Giles, M. & Glasserman, P. (2006). Smoking adjoints: fast Monte Carlo Greeks. *Risk*, January 2006.
 - Glasserman, P. (2004). *Monte Carlo Methods in Financial Engineering*. Springer.
 - Griewank, A. & Walther, A. (2008). *Evaluating Derivatives: Principles and Techniques of Algorithmic Differentiation*, 2nd ed. SIAM.
+- Isserlis, L. (1918). On a formula for the product-moment coefficient of any order of a normal frequency distribution in any number of variables. *Biometrika* 12(1/2), 134-139.
 - Kemna, A. G. Z. & Vorst, A. C. F. (1990). A pricing method for options based on average asset values. *Journal of Banking & Finance* 14(1), 113-129.
 - Satterthwaite, F. E. (1946). An approximate distribution of estimates of variance components. *Biometrics Bulletin* 2(6), 110-114.
 - Šidák, Z. (1967). Rectangular confidence regions for the means of multivariate normal distributions. *Journal of the American Statistical Association* 62(318), 626-633.
