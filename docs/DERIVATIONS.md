@@ -249,8 +249,9 @@ pathwise gamma estimator is identically 0: not noisy, but structurally blind. Fi
 - smooth the payoff (softplus), trading an O(ε²) bias for variance ~1/ε;
 - finite-difference the pathwise delta with common random numbers.
 
-At the money here, pathwise-LR is best, CRN FD is 1.11x its RMSE, smoothed AD 1.25x and
-LR 3.57x (E3).
+At the money here (E3), pathwise-LR on the put leg ("parity", since K < S0 e^{rT}) is
+best. Relative to its RMSE, plain pathwise-LR is 1.58x [1.45, 1.71], CRN FD 1.76x
+[1.61, 1.92], smoothed AD 1.97x [1.81, 2.15], LR (parity) 3.50x and LR 5.63x.
 </details>
 
 <details>
@@ -293,7 +294,7 @@ tuning. The honest statement is that AD wins on cost and robustness, not on accu
 - **Forward mode** costs ~1-2.5 function evaluations per input direction.
 - **Reverse mode** costs ~2-4 evaluations per output (the cheap-gradient bound), plus
   memory for the tape.
-- **One price, many sensitivities:** reverse. E6: 1,325 basket sensitivities for 2.05x
+- **One price, many sensitivities:** reverse. E6: 1,325 basket sensitivities (+ price) for 2.05x
   flops, against forward's 1,389x.
 - **Many outputs of one input** (a delta ladder across strikes, a whole vector of
   prices): forward. E6b: 1,000 strikes cost 3.3x in forward flops vs 669x in reverse.
@@ -332,7 +333,7 @@ storing them, the balance would differ.
 </details>
 
 <details>
-<summary><b>7. How would you check that 1,325 basket sensitivities are all correct?</b></summary>
+<summary><b>7. How would you check that 1,325 basket sensitivities (+ price) are all correct?</b></summary>
 
 - **Change the payoff to the geometric basket,** which has a closed form (log G_T is
   normal). Everything else, including the Cholesky and correlation code, is shared
@@ -350,7 +351,7 @@ storing them, the balance would differ.
 </details>
 
 <details>
-<summary><b>8. Pathwise-LR is the best gamma estimator at the money. Why does it fail in the money, and how do you fix it?</b></summary>
+<summary><b>8. Plain pathwise-LR beats finite differences for gamma at the money. Why does it fail in the money, and how do you fix it?</b></summary>
 
 - **The failure.** Pathwise-LR multiplies f'(S_T) S_T by a score weight. In the money
   a call's f' = 1 on most paths, so the estimator is dominated by the linear part of
@@ -359,7 +360,9 @@ storing them, the balance would differ.
 - **The fix is put-call parity.** C - P is linear in S0, so the put has the same gamma,
   and the put's f' = -1{S_T < K} is nonzero only in the tail. Switching to the put leg
   when K < S0 e^{rT} cuts the RMSE to 0.045x.
-- **Result:** best or tied in 17 of 20 strike/maturity cells, worst case 2.9x.
+- **Result:** best or tied in 17 of 20 strike/maturity cells, worst case 2.9x. It helps
+  at the money too, because K = 100 is below the forward (105.1): 0.63x [0.58, 0.69]
+  the RMSE of plain pathwise-LR (E3).
 - **The same idea applies to the digital delta** (1{S > K} = 1 - 1{S < K}): the worst
   case falls from 23x to 1.7x.
 </details>

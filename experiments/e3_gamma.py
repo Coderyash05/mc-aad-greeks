@@ -3,7 +3,9 @@
 E3 compares gamma estimators over REPS independent batches of N paths (the same
 evaluation random numbers as E2, so untuned results are unchanged):
   naive autodiff, FD with common random numbers, likelihood ratio (LR), mixed
-  pathwise-LR, and softplus-smoothed autodiff.
+  pathwise-LR, softplus-smoothed autodiff, and the parity-switched LR and pathwise-LR
+  (put leg, since K = 100 < S0 e^{rT} = 105.1; mcgreeks.greeks_lr). The parity methods
+  are in the tables and CSVs; the figure keeps the original method set.
 The two tuned methods (FD bump h, smoothing width eps) are tuned OUT OF SAMPLE:
 h and eps are chosen by RMSE on separate calibration batches, then evaluated on the
 evaluation batches. The in-sample choice (best on the evaluation batches) is also
@@ -29,7 +31,8 @@ import numpy as np
 
 import mcgreeks  # noqa: F401
 from mcgreeks.black_scholes import bs_greeks
-from mcgreeks.greeks_lr import (lr_gamma_samples, pwlr_gamma_samples,
+from mcgreeks.greeks_lr import (lr_gamma_parity_samples, lr_gamma_samples,
+                                pwlr_gamma_parity_samples, pwlr_gamma_samples,
                                 smooth_gamma_samples)
 from mcgreeks.pricer import discounted_payoffs, mc_price
 from mcgreeks.stats import paired_bootstrap, tune, verdict
@@ -68,7 +71,9 @@ def estimates(Z):
         S0, SIGMA, R, T, K, Z))
     return {"fd": fd, "smooth": sm, "naive": naive,
             "lr": per_batch(lr_gamma_samples(S0, SIGMA, R, T, K, Zf)),
-            "pwlr": per_batch(pwlr_gamma_samples(S0, SIGMA, R, T, K, Zf))}
+            "pwlr": per_batch(pwlr_gamma_samples(S0, SIGMA, R, T, K, Zf)),
+            "lr_par": per_batch(lr_gamma_parity_samples(S0, SIGMA, R, T, K, Zf)),
+            "pwlr_par": per_batch(pwlr_gamma_parity_samples(S0, SIGMA, R, T, K, Zf))}
 
 
 def main():
@@ -80,9 +85,11 @@ def main():
     t_fd = tune(H_GRID, cal["fd"], ev["fd"], g_ex)
     t_sm = tune(EPS_GRID, cal["smooth"], ev["smooth"], g_ex)
     names = {"fd": f"FD, CRN (h = {t_fd['value']:.3g})", "lr": "Likelihood ratio",
-             "pwlr": "Pathwise-LR (mixed)", "smooth": f"Autodiff, smoothed (eps = {t_sm['value']:.2g})"}
+             "pwlr": "Pathwise-LR (mixed)", "smooth": f"Autodiff, smoothed (eps = {t_sm['value']:.2g})",
+             "lr_par": "LR (parity)", "pwlr_par": "Pathwise-LR (parity)"}
     est = {"fd": ev["fd"][t_fd["index"]], "lr": ev["lr"], "pwlr": ev["pwlr"],
-           "smooth": ev["smooth"][t_sm["index"]]}
+           "smooth": ev["smooth"][t_sm["index"]], "lr_par": ev["lr_par"],
+           "pwlr_par": ev["pwlr_par"]}
     boot = paired_bootstrap({names[m]: est[m] - g_ex for m in est}, seed=BOOT_SEED)
 
     # all pairwise ratios, same resamples (same seed) for every reference
